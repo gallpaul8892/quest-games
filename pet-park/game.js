@@ -603,6 +603,7 @@ function startFollow(d, leader) {
   d.mode = 'follow'; d.followTarget = leader; d.followT = rand(1.5, 3); d.ball = null;
 }
 function toWander(a) {
+  if (a.mode === 'catchase' && a.chaseCat && a.chaseCat.chaser === a) a.chaseCat.chaser = null;
   a.mode = 'wander'; a.ball = null; a.target = null; a.fight = null; a.followTarget = null;
   a.idleT = rand(0.3, 1.2); a.zoom = false; a.pounce = 0;
 }
@@ -771,6 +772,39 @@ function updateAnimal(a, dt, t, player) {
       if (d < 1.0) dogDrop(a);
       break;
     }
+    case 'catchase': {
+      // a dog bounding after a cat — it never quite catches it
+      const c = a.chaseCat;
+      a.catChaseT -= dt;
+      const d = c ? Math.hypot(c.group.position.x - p.x, c.group.position.z - p.z) : 99;
+      if (!c || c.mode !== 'flee' || a.catChaseT <= 0 || d > 7) { giveUpCatChase(a); break; }
+      steer(a, c.group.position.x, c.group.position.z, dt, 6);
+      want = Math.min(a.fast * 0.9, c.fast * 0.9);
+      if (d < 0.7) want *= 0.6;   // ease off rather than bump into it
+      if (Math.random() < dt * 0.6 && canPlay('yip', 0.5)) yip(volAt(p) * 0.6, a.voice);
+      break;
+    }
+    case 'flee': {
+      const dog = a.chaser;
+      if (!dog || dog.mode !== 'catchase' || dog.chaseCat !== a) { toWander(a); a.idleT = rand(0.5, 1.5); break; }
+      const ddx = p.x - dog.group.position.x, ddz = p.z - dog.group.position.z;
+      const dd = Math.hypot(ddx, ddz) || 1;
+      const r0 = Math.hypot(p.x, p.z) || 1;
+      const inward = clamp((r0 - (ARENA - 2.5)) / 2, 0, 1) * 1.6;      // swerve away from the fence
+      const wob = Math.sin(t * 1.7 + a.seed) * 0.5;
+      let hx = ddx / dd - p.x / r0 * inward, hz = ddz / dd - p.z / r0 * inward;
+      hx += -hz * wob; hz += hx * wob;
+      turnTo(a, Math.atan2(hx, hz), dt, 6);
+      want = a.fast;
+      a.dodgeT = (a.dodgeT ?? 0) - dt;
+      if (dd < 0.75 && a.dodgeT <= 0) {               // a nimble sideways hop
+        a.dodgeT = 1.2;
+        g.rotation.y += (Math.random() < 0.5 ? 1 : -1) * rand(0.9, 1.4);
+        playOnce(a, 'jump', t);
+        if (canPlay('mrrp', 0.3)) mrrp(volAt(p) * 0.7, a.voice * 1.1);
+      }
+      break;
+    }
     case 'fooled': {
       if (a.fakePhase === 'run') {
         const d = steer(a, a.fakeTarget.x, a.fakeTarget.z, dt, 7);
@@ -917,8 +951,37 @@ function separateAnimals() {
   }
 }
 
-let catFightTimer = 3;
+let catFightTimer = 3, catChaseTimer = rand(5, 9);
+function giveUpCatChase(dog) {
+  const c = dog.chaseCat;
+  toWander(dog); dog.chaseCat = null;
+  dog.idleT = rand(1.5, 3); dog.idleKey = Math.random() < 0.6 ? 'sniff' : 'idle2';
+  if (c && c.mode === 'flee' && c.chaser === dog) { toWander(c); c.chaser = null; c.idleT = rand(0.8, 2); }
+}
+function startCatChase() {
+  if (dogs.filter(d => d.mode === 'catchase').length >= 2) return;
+  const freeDogs = dogs.filter(d => d.mode === 'wander' && d.petTimer <= 0 && d.group.position.distanceTo(playerPos) > 2).sort(() => Math.random() - 0.5);
+  for (const d of freeDogs) {
+    let best = null, bd = 6;
+    for (const c of cats) {
+      if (c.mode !== 'wander' || c.petTimer > 0) continue;
+      const dist = c.group.position.distanceTo(d.group.position);
+      if (dist < bd) { bd = dist; best = c; }
+    }
+    if (!best) continue;
+    toWander(d);
+    d.mode = 'catchase'; d.chaseCat = best; d.catChaseT = rand(3.5, 6.5);
+    toWander(best);
+    best.mode = 'flee'; best.chaser = d;
+    best.group.getWorldPosition(tmpV);
+    if (canPlay('bark', 0.5)) bark(volAt(tmpV) * 0.7, d.voice);
+    if (canPlay('meow', 0.5)) setTimeout(() => meow(volAt(tmpV) * 0.6, best.voice * 1.15), 250);
+    return;
+  }
+}
 function director(dt) {
+  catChaseTimer -= dt;
+  if (catChaseTimer <= 0) { catChaseTimer = rand(6, 12); startCatChase(); }
   catFightTimer -= dt;
   if (catFightTimer > 0) return;
   catFightTimer = rand(2, 5);
@@ -1261,7 +1324,7 @@ addEventListener('resize', () => {
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, throwBall, grabBall, pet, fakeThrow, renderer, scene, camera, dolly };
+window.petPark = { animals, dogs, cats, balls, fights, stats, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
