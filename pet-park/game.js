@@ -18,7 +18,18 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const MODEL_CONFIG = {
   dog: {
     url: './models/dog.glb', length: 0.8, yaw: 0,
+    mainMat: 'Main', lightMat: 'Main_Light',
     walkNative: 1.0, runNative: 3.2,
+    clips: {
+      idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
+      walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
+      happy: ['Jump_ToIdle', 'Idle_2'], hitL: ['Idle_HitReact_Left'], hitR: ['Idle_HitReact_Right'],
+    },
+  },
+  husky: {
+    url: './models/husky.glb', length: 1.0, yaw: 0,
+    walkNative: 1.25, runNative: 4.0,
+    mainMat: 'Material', lightMat: 'Material.001',
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
       walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
@@ -301,17 +312,28 @@ async function loadTemplate(kind) {
   }
   return { cfg, scene: root, k, height: size.y * k, minY: box.min.y * k, centerX: (box.min.x + box.max.x) / 2 * k, centerZ: (box.min.z + box.max.z) / 2 * k, clips: resolved };
 }
-const [dogTpl, catTpl] = await Promise.all([loadTemplate('dog'), loadTemplate('cat')]);
+const [dogTpl, huskyTpl, catTpl] = await Promise.all([loadTemplate('dog'), loadTemplate('husky'), loadTemplate('cat')]);
+const TPL = { dog: dogTpl, husky: huskyTpl, cat: catTpl };
 
 // ---------- Animals ----------
 const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy'];
 const CAT_NAMES = ['Mochi', 'Tilly', 'Smudge', 'Willow', 'Haggis', 'Pixel', 'Clover', 'Nutmeg', 'Luna', 'Pudding', 'Socks'];
 // dog coats: [main, light]
-const DOG_COATS = [[0x7a3d12, 0xf1e6d6], [0x2a2420, 0xd9b48a], [0xe9dcc6, 0xffffff], [0xc98a2e, 0xfbeed6], [0x6f6a66, 0xeeeeee], [0x8a4b22, 0xf3e3cc]];
+// Dog line-up: breed, size multiplier and coat [main, light]. Small, medium and large.
+const TAN = [0xc47a35, 0xf3e9da], CREAM = [0xead9bd, 0xfaf5ec], BLACKTAN = [0x2b2622, 0xd9b48a], SESAME = [0x8a6540, 0xeadcc6];
+const H_BLACK = [0x33343a, 0xf2f2f2], H_GREY = [0x8b8f96, 0xf4f4f4], H_COPPER = [0x9a5a33, 0xf3ece2], H_WHITE = [0xe8e6e0, 0xffffff];
+const DOG_TYPES = [
+  { breed: 'dog', mul: 0.55, coat: TAN }, { breed: 'dog', mul: 0.62, coat: CREAM }, { breed: 'dog', mul: 0.7, coat: BLACKTAN },
+  { breed: 'dog', mul: 0.9, coat: SESAME }, { breed: 'dog', mul: 1.0, coat: TAN }, { breed: 'dog', mul: 1.08, coat: BLACKTAN },
+  { breed: 'husky', mul: 0.6, coat: H_GREY },
+  { breed: 'husky', mul: 1.0, coat: H_BLACK }, { breed: 'husky', mul: 1.1, coat: H_COPPER },
+  { breed: 'husky', mul: 1.22, coat: H_GREY }, { breed: 'husky', mul: 1.35, coat: H_WHITE },
+];
 // cat tints (multiplied over the texture, or used as the main colour)
-const CAT_TINTS = [0x2a2a2e, 0xd9822b, 0x8d8d96, 0xf2efe9, 0x8a6a4a, 0xe8c9a0];
+// realistic cat colours: black, grey, white, ginger (orange), brown tabby, cream
+const CAT_TINTS = [0x26262a, 0x8a8d94, 0xeeeae2, 0xd98a3a, 0x7a6248, 0xe6cfa8];
 
-function setupMaterials(model, kind, coat) {
+function setupMaterials(model, kind, coat, cfg) {
   model.traverse(o => {
     if (!o.isMesh) return;
     o.castShadow = true;
@@ -320,10 +342,10 @@ function setupMaterials(model, kind, coat) {
     const out = mats.map(m => {
       const c = m.clone();
       if (kind === 'dog') {
-        if (c.name === 'Main') c.color.setHex(coat[0]).convertSRGBToLinear();
-        else if (c.name === 'Main_Light') c.color.setHex(coat[1]).convertSRGBToLinear();
+        if (c.name === cfg.mainMat) c.color.setHex(coat[0]);
+        else if (c.name === cfg.lightMat) c.color.setHex(coat[1]);
       } else {
-        if (/grey|main|fur|body/i.test(c.name)) c.color.setHex(coat).convertSRGBToLinear();
+        if (/grey|main|fur|body/i.test(c.name)) c.color.setHex(coat);
       }
       return c;
     });
@@ -331,14 +353,14 @@ function setupMaterials(model, kind, coat) {
   });
 }
 
-function makeAnimal({ kind, name, coat, x, z }) {
+function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   const isDog = kind === 'dog';
-  const tpl = isDog ? dogTpl : catTpl;
+  const tpl = TPL[breed];
   const group = new THREE.Group();
   const model = SkeletonUtils.clone(tpl.scene);
   model.scale.multiplyScalar(tpl.k);
   model.position.set(-tpl.centerX, -tpl.minY, -tpl.centerZ);
-  setupMaterials(model, kind, coat);
+  setupMaterials(model, kind, coat, tpl.cfg);
   group.add(model);
 
   let head = null;
@@ -354,7 +376,7 @@ function makeAnimal({ kind, name, coat, x, z }) {
   label.visible = false;
   group.add(label);
 
-  const variation = rand(0.88, 1.12);
+  const variation = mul * rand(0.96, 1.04);
   group.scale.setScalar(variation);
   group.position.set(x, 0, z);
   group.rotation.y = rand(0, Math.PI * 2);
@@ -369,8 +391,8 @@ function makeAnimal({ kind, name, coat, x, z }) {
     mixer, actions, current: null, oneShotUntil: 0, idleKey: 'idle',
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
     size: (isDog ? 1 : 0.72) * variation,
-    speed: (isDog ? 1.1 : 0.8) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * rand(0.9, 1.1),
-    voice: rand(0.8, 1.25), seed: rand(0, 100),
+    speed: (isDog ? 1.1 : 0.8) * (0.6 + 0.4 * variation) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * (0.7 + 0.3 * variation) * rand(0.9, 1.1),
+    voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation), 0.7, 1.5), seed: rand(0, 100),
     mode: 'wander', target: null, idleT: rand(0, 2), zoom: false,
     curSpeed: 0, petTimer: 0, heartT: 0, lastSound: -10, stroke: 0,
     ball: null, carrying: null, fight: null, followTarget: null, followT: 0, chaseT: 0, excite: 1, bats: 0, pounce: 0, tussleT: 0,
@@ -411,8 +433,8 @@ function spawnSpot() {
   const ang = rand(0, Math.PI * 2), r = rand(2.5, 8.5);
   return { x: Math.cos(ang) * r, z: Math.sin(ang) * r };
 }
-const dogs = DOG_NAMES.map((name, i) => makeAnimal({ kind: 'dog', name, coat: DOG_COATS[i % DOG_COATS.length], ...spawnSpot() }));
-const cats = CAT_NAMES.map((name, i) => makeAnimal({ kind: 'cat', name, coat: CAT_TINTS[i % CAT_TINTS.length], ...spawnSpot() }));
+const dogs = DOG_NAMES.map((name, i) => makeAnimal({ kind: 'dog', name, ...DOG_TYPES[i % DOG_TYPES.length], ...spawnSpot() }));
+const cats = CAT_NAMES.map((name, i) => makeAnimal({ kind: 'cat', name, mul: [0.85, 1, 1.1, 0.7][i % 4], coat: CAT_TINTS[i % CAT_TINTS.length], ...spawnSpot() }));
 const animals = [...dogs, ...cats];
 statusEl.textContent = 'Ready! Tap “Enter VR” on your Quest.';
 
