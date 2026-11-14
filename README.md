@@ -20,6 +20,7 @@ WebXR needs HTTPS, so host the repo with GitHub Pages:
 | | Quest 3 | Desktop |
 |---|---|---|
 | Move | Left stick | WASD |
+| Exit VR | B button | — |
 | Turn / look | Right stick (snap turn) | Drag the mouse |
 | Pet | Grip or trigger with your hand near a pet, or just stroke it | Click a nearby pet |
 | Ball | Grip a ball, or point at one and grip to pull it to your hand. Swing and let go to throw | Click a ball to pick it up, click again to throw |

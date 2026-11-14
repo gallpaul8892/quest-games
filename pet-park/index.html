@@ -18,7 +18,7 @@
 </head>
 <body>
 <div id="info">
-  <b>Quest 3:</b> “Enter VR” · left stick walk · right stick turn · grip/trigger near a pet = pet it · grip a ball (or point at one and grip to pull it to your hand), swing and let go to throw<br>
+  <b>Quest 3:</b> “Enter VR” · left stick walk · right stick turn · B button exits VR · grip/trigger near a pet = pet it · grip a ball (or point at one and grip to pull it to your hand), swing and let go to throw<br>
   <b>Desktop:</b> WASD walk · drag to look · click a nearby pet to pet it · click a ball to pick it up, click again to throw
 </div>
 <script type="module">
@@ -989,12 +989,18 @@ function updateHands(dt) {
   }
 }
 
-let snapReady = true;
+let snapReady = true, bWasDown = true;
 function updateXRLocomotion(dt) {
   const session = renderer.xr.getSession();
   if (!session) return;
   for (const src of session.inputSources) {
     const gp = src.gamepad;
+    // B button (right controller, xr-standard button 5) exits VR
+    if (gp && src.handedness === 'right') {
+      const bDown = !!gp.buttons[5]?.pressed;
+      if (bDown && !bWasDown) { session.end(); return; }
+      bWasDown = bDown;
+    }
     if (!gp || gp.axes.length < 4) continue;
     const ax = gp.axes[2], ay = gp.axes[3];
     if (src.handedness === 'left') {
