@@ -24,6 +24,7 @@ const MODEL_CONFIG = {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
       walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
       happy: ['Jump_ToIdle', 'Idle_2'], hitL: ['Idle_HitReact_Left'], hitR: ['Idle_HitReact_Right'],
+      eat: ['Eating', 'Idle_2_HeadLow'],
     },
   },
   husky: {
@@ -34,6 +35,7 @@ const MODEL_CONFIG = {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
       walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
       happy: ['Jump_ToIdle', 'Idle_2'], hitL: ['Idle_HitReact_Left'], hitR: ['Idle_HitReact_Right'],
+      eat: ['Eating', 'Idle_2_HeadLow'],
     },
   },
   cat: {
@@ -125,9 +127,9 @@ const scorePanel = makeTextPanel('', 2000, 128, 46, 2.6);
 scorePanel.position.set(0, 1.75, -2.5);
 scene.add(scorePanel);
 
-const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0 };
+const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0, meals: 0 };
 function updateScore() {
-  scorePanel.userData.setText(`Pets: ${stats.pets}  ·  Fetches: ${stats.fetches}  ·  Fake-outs: ${stats.fakeOuts}  ·  Cat scuffles: ${stats.catScuffles}  ·  Dog pile-ups: ${stats.dogScuffles}`);
+  scorePanel.userData.setText(`Pets ${stats.pets}  ·  Fetches ${stats.fetches}  ·  Fake-outs ${stats.fakeOuts}  ·  Meals ${stats.meals}  ·  Cat scuffles ${stats.catScuffles}  ·  Dog pile-ups ${stats.dogScuffles}`);
 }
 
 // ---------- Ball table ----------
@@ -145,6 +147,134 @@ const TABLE = { x: 0.55, z: 1.0, r: 0.32, top: 0.85 };
   const sign = makeTextSprite('Balls! Grab & throw', 512, 128, 52, 0.5);
   sign.position.set(TABLE.x, TABLE.top + 0.45, TABLE.z);
   scene.add(sign);
+}
+
+// ---------- Automatic feeder + bowls ----------
+const HUNGRY = 0.65;
+const FEEDER = { x: -1.9, z: -0.7 };
+const BUTTON = new THREE.Vector3(-0.6, 0.97, 1.0);
+const feeder = { busyUntil: 0, spin: 0, pressT: -9 };
+const bowls = [];
+const kibbles = [];
+let kibbleMesh, spinner, buttonCap;
+{
+  const body = new THREE.MeshStandardMaterial({ color: 0xe8573f, roughness: 0.5, flatShading: true });
+  const metal = new THREE.MeshStandardMaterial({ color: 0xc9ced6, roughness: 0.35, metalness: 0.6 });
+  const glass = new THREE.MeshStandardMaterial({ color: 0xbfe6ff, roughness: 0.1, transparent: true, opacity: 0.45 });
+  const fx = FEEDER.x, fz = FEEDER.z;
+  const parts = [];
+  for (let i = 0; i < 3; i++) {
+    const ang = i * Math.PI * 2 / 3;
+    const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 0.8, 8), metal);
+    leg.position.set(fx + Math.cos(ang) * 0.28, 0.4, fz + Math.sin(ang) * 0.28);
+    parts.push(leg);
+  }
+  const funnel = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.1, 0.3, 16), body); funnel.position.set(fx, 0.95, fz);
+  const tank = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.36, 0.5, 16, 1, true), glass); tank.position.set(fx, 1.35, fz);
+  const kib = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.33, 0.32, 16), new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.9, flatShading: true }));
+  kib.position.set(fx, 1.26, fz);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.42, 0.25, 16), body); roof.position.set(fx, 1.73, fz);
+  spinner = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.04, 12), metal); spinner.position.set(fx, 0.78, fz);
+  parts.push(funnel, tank, kib, roof, spinner);
+  for (const m of parts) { m.castShadow = true; scene.add(m); }
+  const sign = makeTextSprite('Auto Feeder', 512, 128, 56, 0.5);
+  sign.position.set(fx, 2.05, fz); scene.add(sign);
+
+  // button post near the start
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.05, BUTTON.y - 0.06, 10), metal);
+  post.position.set(BUTTON.x, (BUTTON.y - 0.06) / 2, BUTTON.z);
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.17, 0.08, 0.17), new THREE.MeshStandardMaterial({ color: 0xffd23f, roughness: 0.5 }));
+  box.position.set(BUTTON.x, BUTTON.y - 0.04, BUTTON.z);
+  buttonCap = new THREE.Mesh(new THREE.CylinderGeometry(0.058, 0.062, 0.035, 20),
+    new THREE.MeshStandardMaterial({ color: 0xe8253a, roughness: 0.3, emissive: 0x550000 }));
+  buttonCap.position.set(BUTTON.x, BUTTON.y + 0.015, BUTTON.z);
+  for (const m of [post, box, buttonCap]) { m.castShadow = true; scene.add(m); }
+  const bsign = makeTextSprite('FEED the pets!', 512, 128, 54, 0.42);
+  bsign.position.set(BUTTON.x, BUTTON.y + 0.3, BUTTON.z); scene.add(bsign);
+  // cable from the button to the feeder
+  const cable = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
+    new THREE.Vector3(BUTTON.x, 0.02, BUTTON.z), new THREE.Vector3((BUTTON.x + fx) / 2, 0.02, (BUTTON.z + fz) / 2 + 0.3), new THREE.Vector3(fx, 0.02, fz),
+  ]), 20, 0.012, 5), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+  scene.add(cable);
+
+  // ring of bowls
+  const bowlProfile = [[0, 0], [0.1, 0], [0.13, 0.015], [0.15, 0.065], [0.135, 0.065], [0.115, 0.022], [0, 0.022]].map(([x, y]) => new THREE.Vector2(x, y));
+  const bowlGeo = new THREE.LatheGeometry(bowlProfile, 20);
+  const foodGeo = new THREE.SphereGeometry(0.11, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2);
+  const foodMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b, roughness: 0.95, flatShading: true });
+  const BOWL_COLOURS = [0x3b8fd9, 0xf2a93b, 0x6cc070, 0xe86a92, 0x9b6bff];
+  const N = 10, R = 1.3;
+  for (let i = 0; i < N; i++) {
+    const ang = i * Math.PI * 2 / N + 0.3;
+    const pos = new THREE.Vector3(fx + Math.cos(ang) * R, 0, fz + Math.sin(ang) * R);
+    const bowl = new THREE.Mesh(bowlGeo, new THREE.MeshStandardMaterial({ color: BOWL_COLOURS[i % BOWL_COLOURS.length], roughness: 0.4 }));
+    bowl.position.copy(pos); bowl.castShadow = true; scene.add(bowl);
+    const food = new THREE.Mesh(foodGeo, foodMat);
+    food.position.set(pos.x, 0.022, pos.z); food.visible = false; scene.add(food);
+    bowls.push({ pos, mesh: bowl, foodMesh: food, food: 0, occupant: null });
+  }
+  kibbleMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.014, 0), foodMat, 400);
+  kibbleMesh.count = 0;
+  kibbleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(kibbleMesh);
+}
+function freeBowlFor(a) {
+  let best = null, bd = Infinity;
+  for (const b of bowls) {
+    if (b.food <= 0.08 || (b.occupant && b.occupant !== a)) continue;
+    const d = b.pos.distanceTo(a.group.position);
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best;
+}
+function pressFeeder(handIndex = -1) {
+  const t = clock.elapsedTime;
+  feeder.pressT = t;
+  haptic(handIndex, 0.7, 80);
+  if (t < feeder.busyUntil) return;
+  feeder.busyUntil = t + 2.2;
+  audio(); ding();
+  // fire kibble from the spinner into every bowl
+  const spout = new THREE.Vector3(FEEDER.x, 0.78, FEEDER.z);
+  for (const b of bowls) {
+    for (let k = 0; k < 14; k++) {
+      const delay = rand(0, 1.6), T = rand(0.45, 0.7);
+      const target = new THREE.Vector3(b.pos.x + rand(-0.06, 0.06), 0.05, b.pos.z + rand(-0.06, 0.06));
+      const vel = target.clone().sub(spout).sub(new THREE.Vector3(0, -0.5 * 9.8 * T * T, 0)).divideScalar(T);
+      kibbles.push({ start: t + delay, T, from: spout.clone(), vel, bowl: b, rot: rand(0, 6) });
+    }
+  }
+}
+const kibM = new THREE.Matrix4(), kibQ = new THREE.Quaternion(), kibS = new THREE.Vector3(1, 1, 1), kibE = new THREE.Euler();
+function updateFeeder(dt, t) {
+  const pressed = t - feeder.pressT < 0.25;
+  buttonCap.position.y = BUTTON.y + (pressed ? 0.002 : 0.015);
+  buttonCap.material.emissive.setHex(t < feeder.busyUntil ? 0xff3030 : 0x550000);
+  feeder.spin = t < feeder.busyUntil ? 14 : feeder.spin * Math.exp(-3 * dt);
+  spinner.rotation.y += feeder.spin * dt;
+  if (t < feeder.busyUntil && Math.random() < dt * 25 && canPlay('rattle', 0.03)) crunch(0.35, 3200);
+  let n = 0;
+  for (let i = kibbles.length - 1; i >= 0; i--) {
+    const k = kibbles[i];
+    const age = t - k.start;
+    if (age < 0) continue;
+    if (age >= k.T) {
+      k.bowl.food = Math.min(1, k.bowl.food + 1 / 14);
+      kibbles.splice(i, 1);
+      continue;
+    }
+    if (n >= 400) continue;
+    tmpV.copy(k.from).addScaledVector(k.vel, age); tmpV.y -= 0.5 * 9.8 * age * age;
+    kibE.set(k.rot + age * 9, k.rot * 2 + age * 7, 0); kibQ.setFromEuler(kibE);
+    kibM.compose(tmpV, kibQ, kibS);
+    kibbleMesh.setMatrixAt(n++, kibM);
+  }
+  kibbleMesh.count = n;
+  kibbleMesh.instanceMatrix.needsUpdate = true;
+  for (const b of bowls) {
+    b.foodMesh.visible = b.food > 0.01;
+    b.foodMesh.scale.set(0.6 + b.food * 0.4, 0.15 + b.food * 0.55, 0.6 + b.food * 0.4);
+  }
 }
 
 // ---------- Audio (synthesised) ----------
@@ -228,6 +358,44 @@ function purr(vol = 1) {
   const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300;
   const g = c.createGain(); env(g, t, 0.12 * vol, 0.15, 0.9, 0.4);
   o.connect(f).connect(g).connect(c.destination); o.start(t); o.stop(t + 1.5);
+}
+let noiseBuf = null;
+function noise(c) {
+  if (!noiseBuf) {
+    noiseBuf = c.createBuffer(1, c.sampleRate * 0.3, c.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  }
+  const n = c.createBufferSource(); n.buffer = noiseBuf; return n;
+}
+function crunch(vol = 1, freq = 2200) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const n = noise(c);
+  const f = c.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq * rand(0.8, 1.25); f.Q.value = 1.5;
+  const g = c.createGain(); env(g, t, 0.25 * vol, 0.003, 0.01, 0.05);
+  n.connect(f).connect(g).connect(c.destination); n.start(t, rand(0, 0.2)); n.stop(t + 0.08);
+}
+function whine(vol = 1, pitch = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const o = c.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(650 * pitch, t);
+  o.frequency.linearRampToValueAtTime(950 * pitch, t + 0.25);
+  o.frequency.linearRampToValueAtTime(700 * pitch, t + 0.55);
+  const lfo = c.createOscillator(); lfo.frequency.value = 9;
+  const lg = c.createGain(); lg.gain.value = 25; lfo.connect(lg).connect(o.frequency);
+  const g = c.createGain(); env(g, t, 0.16 * vol, 0.05, 0.35, 0.15);
+  o.connect(g).connect(c.destination); o.start(t); lfo.start(t); o.stop(t + 0.6); lfo.stop(t + 0.6);
+}
+function ding() {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  for (const [f, d] of [[880, 0], [1320, 0.12]]) {
+    const o = c.createOscillator(); o.type = 'sine'; o.frequency.value = f;
+    const g = c.createGain(); env(g, t + d, 0.2, 0.005, 0.05, 0.5);
+    o.connect(g).connect(c.destination); o.start(t + d); o.stop(t + d + 0.6);
+  }
 }
 function boing(vol = 1) {
   if (!audioOK()) return;
@@ -315,6 +483,18 @@ async function loadTemplate(kind) {
 const [dogTpl, huskyTpl, catTpl] = await Promise.all([loadTemplate('dog'), loadTemplate('husky'), loadTemplate('cat')]);
 const TPL = { dog: dogTpl, husky: huskyTpl, cat: catTpl };
 
+// ---------- Hunger icon ----------
+const HUNGRY_MAT = new THREE.SpriteMaterial({ depthWrite: false, transparent: true, map: (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,0.95)'; g.beginPath(); g.arc(64, 64, 60, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#ff9a3d'; g.lineWidth = 6; g.stroke();
+  g.fillStyle = '#7a4a24'; g.beginPath(); g.ellipse(64, 66, 30, 12, 0, Math.PI, 0); g.fill();   // kibble pile
+  g.fillStyle = '#3b8fd9'; g.beginPath(); g.moveTo(24, 66); g.lineTo(104, 66); g.lineTo(92, 92); g.lineTo(36, 92); g.closePath(); g.fill();  // bowl
+  g.fillStyle = '#e8463a'; g.font = 'bold 40px system-ui'; g.textAlign = 'center'; g.fillText('!', 64, 44);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})() });
+
 // ---------- Animals ----------
 const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy'];
 const CAT_NAMES = ['Mochi', 'Tilly', 'Smudge', 'Willow', 'Haggis', 'Pixel', 'Clover', 'Nutmeg', 'Luna', 'Pudding', 'Socks'];
@@ -371,6 +551,11 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   group.add(bodyAnchor);
   if (!head) { head = new THREE.Object3D(); head.position.set(0, tpl.height * 0.85, tpl.cfg.length * 0.4); group.add(head); }
 
+  const hungryIcon = new THREE.Sprite(HUNGRY_MAT);
+  hungryIcon.scale.setScalar(0.22);
+  hungryIcon.position.y = tpl.height + 0.3;
+  hungryIcon.visible = false;
+  group.add(hungryIcon);
   const label = makeTextSprite(`${name}: pet me!`, 512, 128, 56, 0.55);
   label.position.y = tpl.height + 0.28;
   label.visible = false;
@@ -387,10 +572,11 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   for (const [role, clip] of Object.entries(tpl.clips)) actions[role] = mixer.clipAction(clip);
 
   const a = {
-    kind, name, isDog, group, model, modelBaseY: model.position.y, head, body: bodyAnchor, label,
+    kind, name, isDog, group, model, hungryIconSprite: hungryIcon, modelBaseY: model.position.y, head, body: bodyAnchor, label,
     mixer, actions, current: null, oneShotUntil: 0, idleKey: 'idle',
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
-    size: (isDog ? 1 : 0.72) * variation,
+    size: (isDog ? 1 : 0.72) * variation, len: tpl.cfg.length * variation,
+    hunger: rand(0.15, 0.5), hungerRate: 1 / rand(100, 170), bowl: null, eatingNow: false, foodCheckT: rand(0, 0.5), hungryIcon: null,
     speed: (isDog ? 1.1 : 0.8) * (0.6 + 0.4 * variation) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * (0.7 + 0.3 * variation) * rand(0.9, 1.1),
     voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation), 0.7, 1.5), seed: rand(0, 100),
     mode: 'wander', target: null, idleT: rand(0, 2), zoom: false,
@@ -537,7 +723,7 @@ function fakeThrow(point) {
   fakeCooldownUntil = clock.elapsedTime + 2;
   let fooled = 0, barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight') continue;
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.hunger > HUNGRY) continue;
     toWander(d);
     d.mode = 'fooled'; d.fakePhase = 'run'; d.fakeRunT = 0; d.excite = rand(0.92, 1.08);
     const ang = rand(0, Math.PI * 2), rad = rand(0.3, 1.8);
@@ -562,7 +748,7 @@ function throwBall(b, vel) {
 function dogsChase(b) {
   let barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight') continue;
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.hunger > HUNGRY) continue;   // too hungry to care
     toWander(d);
     d.mode = 'chase'; d.ball = b; d.chaseT = 0; d.excite = rand(0.92, 1.08);
     if (barks < 3 && Math.random() < 0.4) {
@@ -603,6 +789,8 @@ function startFollow(d, leader) {
   d.mode = 'follow'; d.followTarget = leader; d.followT = rand(1.5, 3); d.ball = null;
 }
 function toWander(a) {
+  if (a.bowl) { if (a.bowl.occupant === a) a.bowl.occupant = null; a.bowl = null; }
+  a.eatingNow = false;
   if (a.mode === 'catchase' && a.chaseCat && a.chaseCat.chaser === a) a.chaseCat.chaser = null;
   a.mode = 'wander'; a.ball = null; a.target = null; a.fight = null; a.followTarget = null;
   a.idleT = rand(0.3, 1.2); a.zoom = false; a.pounce = 0;
@@ -617,7 +805,7 @@ function startFight(type, members, center, ball = null) {
   fights.push(f);
   if (ball) ball.fight = f;
   for (const m of members) joinFight(f, m);
-  if (type === 'dog') { stats.dogScuffles++; updateScore(); }
+  if (type === 'dog' && ball) { stats.dogScuffles++; updateScore(); }
   return f;
 }
 function joinFight(f, a) {
@@ -675,10 +863,12 @@ function updateFights(dt) {
     f.timer -= dt;
     if (f.type === 'dog') {
       const b = f.ball;
-      if (!b || b.state !== 'free') { resolveFight(f); continue; }
-      f.center.x += (b.mesh.position.x - f.center.x) * (1 - Math.exp(-3 * dt));
-      f.center.z += (b.mesh.position.z - f.center.z) * (1 - Math.exp(-3 * dt));
-      if (Math.random() < dt * 2.5) b.vel.set(rand(-1, 1), rand(0.5, 1.2), rand(-1, 1));
+      if (b && b.state !== 'free') { resolveFight(f); continue; }
+      if (b) {
+        f.center.x += (b.mesh.position.x - f.center.x) * (1 - Math.exp(-3 * dt));
+        f.center.z += (b.mesh.position.z - f.center.z) * (1 - Math.exp(-3 * dt));
+        if (Math.random() < dt * 2.5) b.vel.set(rand(-1, 1), rand(0.5, 1.2), rand(-1, 1));
+      }
     }
     f.puffT -= dt;
     if (f.puffT <= 0) {
@@ -708,7 +898,12 @@ function steer(a, x, z, dt, rate) {
   return Math.hypot(dx, dz);
 }
 function chooseTarget(a, player) {
-  if (Math.random() < (a.isDog ? 0.12 : 0.3)) {
+  if (a.hunger > HUNGRY && Math.random() < 0.5) {
+    const ang = rand(0, Math.PI * 2), rad = rand(1.6, 2.6);
+    a.target = new THREE.Vector3(FEEDER.x + Math.cos(ang) * rad, 0, FEEDER.z + Math.sin(ang) * rad);
+    return;
+  }
+  if (a.hunger < HUNGRY && Math.random() < (a.isDog ? 0.12 : 0.3)) {
     let best = null, bd = 6;
     for (const b of balls) {
       if (b.state !== 'free' || b.thrown || b.mesh.position.y > 0.3) continue;
@@ -732,6 +927,22 @@ function updateAnimal(a, dt, t, player) {
   const g = a.group, p = g.position;
   const dxp = player.x - p.x, dzp = player.z - p.z, distP = Math.hypot(dxp, dzp);
   a.petTimer = Math.max(0, a.petTimer - dt);
+  if (a.mode !== 'eat' || !a.eatingNow) a.hunger = Math.min(1, a.hunger + a.hungerRate * dt);
+  // go and eat when hungry and there's food in a bowl
+  a.foodCheckT -= dt;
+  if (a.foodCheckT <= 0) {
+    a.foodCheckT = 0.5;
+    if (a.hunger > 0.35 && (a.mode === 'wander' || a.mode === 'play' || a.mode === 'follow' || a.mode === 'fooled')) {
+      const bw = freeBowlFor(a);
+      if (bw) { toWander(a); a.mode = 'eat'; a.bowl = bw; bw.occupant = a; }
+    }
+  }
+  // hungry pets are noisy
+  if (a.hunger > HUNGRY && a.mode !== 'eat' && Math.random() < dt * 0.3 * a.hunger && canPlay('hungry', 0.45)) {
+    a.group.getWorldPosition(tmpV2);
+    const v = volAt(tmpV2) * 0.8;
+    if (a.isDog) (Math.random() < 0.55 ? whine : bark)(v, a.voice); else meow(v, a.voice * rand(0.95, 1.15));
+  }
 
   let want = 0, hop = 0, label = false, direct = false, attend = false, tussle = false;
 
@@ -770,6 +981,34 @@ function updateAnimal(a, dt, t, player) {
       const d = steer(a, player.x, player.z, dt, 6);
       want = a.speed * 1.4;
       if (d < 1.0) dogDrop(a);
+      break;
+    }
+    case 'eat': {
+      const bw = a.bowl;
+      if (!bw || bw.food <= 0.01) {                     // bowl empty: try another, else give up
+        toWander(a);
+        const nb = a.hunger > 0.1 && freeBowlFor(a);
+        if (nb) { a.mode = 'eat'; a.bowl = nb; nb.occupant = a; }
+        break;
+      }
+      const ox = bw.pos.x - FEEDER.x, oz = bw.pos.z - FEEDER.z, ol = Math.hypot(ox, oz) || 1;
+      const sx = bw.pos.x + ox / ol * a.len * 0.45, sz = bw.pos.z + oz / ol * a.len * 0.45;
+      const d = steer(a, sx, sz, dt, 7);
+      if (d > 0.12) {
+        a.eatingNow = false;
+        want = a.speed * (a.hunger > HUNGRY ? 1.6 : 1.1) * clamp(d / 0.6, 0.3, 1);
+      } else {
+        a.eatingNow = true;
+        p.x += (sx - p.x) * 0.1; p.z += (sz - p.z) * 0.1;
+        turnTo(a, Math.atan2(bw.pos.x - p.x, bw.pos.z - p.z), dt, 8);
+        a.hunger = Math.max(0, a.hunger - 0.28 * dt);
+        bw.food = Math.max(0, bw.food - 0.09 * dt);
+        if (Math.random() < dt * 5 && canPlay('crunch', 0.06)) crunch(volAt(p) * 0.7, a.isDog ? 1800 : 2600);
+        if (a.hunger < 0.04) {                          // full and happy
+          toWander(a); a.idleT = rand(1, 2.5); a.petTimer = 1.0; a.heartT = 0;
+          stats.meals++; updateScore();
+        }
+      }
       break;
     }
     case 'catchase': {
@@ -917,6 +1156,8 @@ function updateAnimal(a, dt, t, player) {
       play(a, 'run', { timeScale: clamp(a.curSpeed / a.runNative, 0.7, 1.7) });
     } else if (a.curSpeed > 0.08) {
       play(a, 'walk', { timeScale: clamp(a.curSpeed / a.walkNative, 0.6, 2) });
+    } else if (a.mode === 'eat' && a.eatingNow) {
+      play(a, a.actions.eat ? 'eat' : 'idle');
     } else if (happy || attend) {
       play(a, 'idle2');
     } else {
@@ -927,9 +1168,16 @@ function updateAnimal(a, dt, t, player) {
     const k = (t - a.hopT0) / a.hopDur;
     hop += Math.sin(k * Math.PI) * a.hopH;
     a.model.rotation.x = a.nuzzle ? Math.sin(k * Math.PI) * 0.25 : -Math.sin(k * Math.PI * 2) * 0.18;
-  } else a.model.rotation.x = 0;
+  } else {
+    // cats have no eating clip: tip the head down into the bowl
+    const tilt = (a.mode === 'eat' && a.eatingNow && !a.actions.eat) ? 0.32 + Math.sin(t * 7 + a.seed) * 0.04 : 0;
+    a.model.rotation.x += (tilt - a.model.rotation.x) * (1 - Math.exp(-8 * dt));
+  }
   a.model.position.y = a.modelBaseY + hop / g.scale.x;
   a.label.visible = label && a.petTimer <= 0;
+  const showHungry = a.hunger > HUNGRY && a.mode !== 'eat' && !a.label.visible;
+  a.hungryIconSprite.visible = showHungry;
+  if (showHungry) a.hungryIconSprite.position.y = a.label.position.y + 0.02 + Math.sin(t * 3 + a.seed) * 0.03;
 }
 
 function separateAnimals() {
@@ -951,7 +1199,7 @@ function separateAnimals() {
   }
 }
 
-let catFightTimer = 3, catChaseTimer = rand(5, 9);
+let catFightTimer = 3, catChaseTimer = rand(5, 9), dogSquabbleTimer = 4;
 function giveUpCatChase(dog) {
   const c = dog.chaseCat;
   toWander(dog); dog.chaseCat = null;
@@ -982,11 +1230,26 @@ function startCatChase() {
 function director(dt) {
   catChaseTimer -= dt;
   if (catChaseTimer <= 0) { catChaseTimer = rand(6, 12); startCatChase(); }
-  catFightTimer -= dt;
+  // hungry dogs get grumpy-playful with each other
+  dogSquabbleTimer -= dt;
+  if (dogSquabbleTimer <= 0) {
+    dogSquabbleTimer = rand(3, 6);
+    const hungryDogs = dogs.filter(d => d.mode === 'wander' && d.hunger > HUNGRY && d.petTimer <= 0);
+    for (const d of hungryDogs) {
+      const o = hungryDogs.find(x => x !== d && x.group.position.distanceTo(d.group.position) < 3);
+      if (o && fights.filter(f => f.type === 'dog' && !f.ball).length < 2) {
+        tmpV.addVectors(d.group.position, o.group.position).multiplyScalar(0.5);
+        startFight('dog', [d, o], tmpV);
+        break;
+      }
+    }
+  }
+  const hungryCats = cats.filter(c => c.hunger > HUNGRY).length;
+  catFightTimer -= dt * (1 + hungryCats * 0.35);
   if (catFightTimer > 0) return;
   catFightTimer = rand(2, 5);
-  if (fights.filter(f => f.type === 'cat').length >= 2) return;
-  const free = cats.filter(c => c.mode === 'wander' && c.petTimer <= 0).sort(() => Math.random() - 0.5);
+  if (fights.filter(f => f.type === 'cat').length >= 2 + (hungryCats > 3 ? 1 : 0)) return;
+  const free = cats.filter(c => c.mode === 'wander' && c.petTimer <= 0).sort((x, y) => (y.hunger - x.hunger) + rand(-0.3, 0.3));
   for (const c of free) {
     const partner = free.find(o => o !== c && o.group.position.distanceTo(c.group.position) < 4);
     if (partner) {
@@ -1126,6 +1389,7 @@ for (let i = 0; i < 2; i++) {
     if (h.ball) return;
     audio();
     if (!pinchPoint(i, tmpV)) return;
+    if (tmpV.distanceTo(BUTTON) < 0.22) { pressFeeder(i); return; }
     let b = ballNear(tmpV, isHand(i) ? 0.2 : 0.28);
     if (!b) {
       const a = animalNear(tmpV, isHand(i) ? 0.45 : 0.6);
@@ -1205,6 +1469,11 @@ function updateHands(dt) {
       if (aimValid[i]) { marker.position.copy(aimPoint[i]); showMarker = true; }
     }
 
+    // poke the feed button with a fingertip (hands) or the controller
+    {
+      const tip = hand ? jointWorld(i, 'index-finger-tip', tmpV3) : grips[i].getWorldPosition(tmpV3);
+      if (tip && Math.hypot(tip.x - BUTTON.x, tip.z - BUTTON.z) < 0.08 && tip.y < BUTTON.y + 0.06 && tip.y > BUTTON.y - 0.05) pressFeeder(i);
+    }
     // stroking / patting with an empty hand
     if (!hands[i].ball && palmPoint(i, tmpV)) {
       if (hasPrev[i] && dt > 0) {
@@ -1264,6 +1533,7 @@ let yaw = 0, pitch = -0.2;
 const keys = new Set();
 addEventListener('keydown', e => {
   keys.add(e.code);
+  if (e.code === 'KeyE' && !renderer.xr.isPresenting) pressFeeder(-1);
   if (e.code === 'KeyF' && deskBall && clock.elapsedTime > fakeCooldownUntil && !renderer.xr.isPresenting) {
     camera.getWorldPosition(tmpV); camera.getWorldDirection(tmpV2);
     fakeThrow(landingPoint(tmpV, tmpV2.multiplyScalar(9).add(new THREE.Vector3(0, 2.5, 0))));
@@ -1286,6 +1556,8 @@ addEventListener('pointerup', e => {
   const wasClick = dragging && !dragMoved;
   dragging = false;
   if (!wasClick || renderer.xr.isPresenting) return;
+  raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  if (raycaster.ray.distanceSqToPoint(BUTTON) < 0.1 * 0.1 && raycaster.ray.origin.distanceTo(BUTTON) < 3.5) { pressFeeder(-1); return; }
   if (deskBall) {
     camera.getWorldDirection(tmpV);
     const b = deskBall; deskBall = null;
@@ -1324,7 +1596,7 @@ addEventListener('resize', () => {
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
+window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
@@ -1349,6 +1621,7 @@ renderer.setAnimationLoop(() => {
   }
   separateAnimals();
   updateBalls(dt);
+  updateFeeder(dt, t);
   updateParticles(dt);
   scenery?.update?.(dt, t, playerPos);
 
