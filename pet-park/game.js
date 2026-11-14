@@ -121,13 +121,13 @@ function makeTextSprite(text, w, h, fontPx, worldW) {
 const hello = makeTextPanel('Hello, World!', 1024, 256, 130, 1.6);
 hello.position.set(0, 2.1, -2.5);
 scene.add(hello);
-const scorePanel = makeTextPanel('', 1700, 128, 46, 2.3);
+const scorePanel = makeTextPanel('', 2000, 128, 46, 2.6);
 scorePanel.position.set(0, 1.75, -2.5);
 scene.add(scorePanel);
 
-const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0 };
+const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0 };
 function updateScore() {
-  scorePanel.userData.setText(`Pets: ${stats.pets}  ·  Fetches: ${stats.fetches}  ·  Cat scuffles: ${stats.catScuffles}  ·  Dog pile-ups: ${stats.dogScuffles}`);
+  scorePanel.userData.setText(`Pets: ${stats.pets}  ·  Fetches: ${stats.fetches}  ·  Fake-outs: ${stats.fakeOuts}  ·  Cat scuffles: ${stats.catScuffles}  ·  Dog pile-ups: ${stats.dogScuffles}`);
 }
 
 // ---------- Ball table ----------
@@ -523,7 +523,36 @@ function grabBall(b, handIndex) {
   if (handIndex >= 0) { b.mesh.position.set(0, 0, 0); hands[handIndex].ball = b; }
   else { b.mesh.position.set(0.22, -0.2, -0.5); deskBall = b; }
 }
+// ---------- Fake throws: swing like you're throwing but keep hold of the ball ----------
+let pendingFake = null, fakeCooldownUntil = 0;
+function landingPoint(p0, v) {
+  const y0 = Math.max(p0.y, 0.1), g = 9.8;
+  const tFlight = (v.y + Math.sqrt(Math.max(0, v.y * v.y + 2 * g * (y0 - 0.07)))) / g;
+  const pt = new THREE.Vector3(p0.x + v.x * tFlight * 1.2, 0, p0.z + v.z * tFlight * 1.2);
+  const r = Math.hypot(pt.x, pt.z);
+  if (r > ARENA) pt.multiplyScalar(ARENA / r);
+  return pt;
+}
+function fakeThrow(point) {
+  fakeCooldownUntil = clock.elapsedTime + 2;
+  let fooled = 0, barks = 0;
+  for (const d of dogs) {
+    if (d.mode === 'fetch' || d.mode === 'fight') continue;
+    toWander(d);
+    d.mode = 'fooled'; d.fakePhase = 'run'; d.fakeRunT = 0; d.excite = rand(0.92, 1.08);
+    const ang = rand(0, Math.PI * 2), rad = rand(0.3, 1.8);
+    d.fakeTarget = new THREE.Vector3(point.x + Math.cos(ang) * rad, 0, point.z + Math.sin(ang) * rad);
+    fooled++;
+    if (barks < 3 && Math.random() < 0.4) {
+      barks++;
+      setTimeout(() => { d.group.getWorldPosition(tmpV2); bark(volAt(tmpV2) * 0.8, d.voice); }, rand(0, 400));
+    }
+  }
+  if (fooled) { stats.fakeOuts++; updateScore(); }
+}
+
 function throwBall(b, vel) {
+  pendingFake = null;
   scene.attach(b.mesh);
   b.mesh.scale.setScalar(1);
   b.state = 'free'; b.hand = null;
@@ -740,6 +769,28 @@ function updateAnimal(a, dt, t, player) {
       const d = steer(a, player.x, player.z, dt, 6);
       want = a.speed * 1.4;
       if (d < 1.0) dogDrop(a);
+      break;
+    }
+    case 'fooled': {
+      if (a.fakePhase === 'run') {
+        const d = steer(a, a.fakeTarget.x, a.fakeTarget.z, dt, 7);
+        want = a.fast * a.excite * clamp(d / 1.2, 0.35, 1);
+        a.fakeRunT += dt;
+        if (d < 0.9 || a.fakeRunT > 6) {
+          a.fakePhase = 'search'; a.fakeT = rand(1.4, 2.4); a.lookDir = Math.random() < 0.5 ? 1 : -1;
+          a.idleKey = 'sniff';
+        }
+      } else if (a.fakePhase === 'search') {
+        // sniff about and look around for the ball that never came
+        a.fakeT -= dt;
+        g.rotation.y += a.lookDir * 1.4 * dt;
+        if (Math.random() < dt * 0.8) a.lookDir *= -1;
+        if (a.fakeT <= 0) { a.fakePhase = 'return'; a.idleKey = 'idle2'; }
+      } else {
+        const d = steer(a, player.x, player.z, dt, 6);
+        want = d > 1.4 ? a.fast * 0.75 : 0;
+        if (d < 1.5) { toWander(a); a.idleT = rand(1, 2.5); }
+      }
       break;
     }
     case 'follow': {
@@ -1075,6 +1126,15 @@ function updateHands(dt) {
       const hist = hands[i].hist;
       hist.push({ p: tmpV.clone(), dt });
       if (hist.length > 6) hist.shift();
+      // spot a throwing swing while still holding the ball
+      if (hands[i].ball && !pendingFake && clock.elapsedTime > fakeCooldownUntil) {
+        const v = handVelocity(i);
+        camera.getWorldDirection(tmpV2); tmpV2.y = 0; tmpV2.normalize();
+        const fwd = v.x * tmpV2.x + v.z * tmpV2.z;
+        if (Math.hypot(v.x, v.z) > 2.0 && fwd > 1.4) {
+          pendingFake = { hand: i, ball: hands[i].ball, t0: clock.elapsedTime, pos: tmpV.clone(), vel: v.multiplyScalar(isHand(i) ? 1.6 : 1.4) };
+        }
+      }
     }
 
     if (aiming[i]) {
@@ -1139,7 +1199,13 @@ function updateXRLocomotion(dt) {
 // ---------- Desktop controls ----------
 let yaw = 0, pitch = -0.2;
 const keys = new Set();
-addEventListener('keydown', e => keys.add(e.code));
+addEventListener('keydown', e => {
+  keys.add(e.code);
+  if (e.code === 'KeyF' && deskBall && clock.elapsedTime > fakeCooldownUntil && !renderer.xr.isPresenting) {
+    camera.getWorldPosition(tmpV); camera.getWorldDirection(tmpV2);
+    fakeThrow(landingPoint(tmpV, tmpV2.multiplyScalar(9).add(new THREE.Vector3(0, 2.5, 0))));
+  }
+});
 addEventListener('keyup', e => keys.delete(e.code));
 let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
 renderer.domElement.addEventListener('pointerdown', e => {
@@ -1195,7 +1261,7 @@ addEventListener('resize', () => {
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, throwBall, grabBall, pet, renderer, scene, camera, dolly };
+window.petPark = { animals, dogs, cats, balls, fights, stats, throwBall, grabBall, pet, fakeThrow, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
@@ -1207,6 +1273,11 @@ renderer.setAnimationLoop(() => {
   if (pr > 12) { dolly.position.x *= 12 / pr; dolly.position.z *= 12 / pr; }
   camera.getWorldPosition(playerPos);
 
+  if (pendingFake && clock.elapsedTime - pendingFake.t0 > 0.3) {
+    // still holding the ball after the swing: it was a fake!
+    const pf = pendingFake; pendingFake = null;
+    if (pf.ball.state === 'held') fakeThrow(landingPoint(pf.pos, pf.vel));
+  }
   director(dt);
   updateFights(dt);
   for (const a of animals) {

@@ -24,6 +24,7 @@ WebXR needs HTTPS, so host the repo with GitHub Pages:
 | Turn / look | Right stick (snap turn) | Drag the mouse |
 | Pet | Grip or trigger with your hand near a pet, or just stroke it | Click a nearby pet |
 | Ball | Grip a ball, or point at one and grip to pull it to your hand. Swing and let go to throw | Click a ball to pick it up, click again to throw |
+| Fake throw | Swing like you're throwing but keep hold of the ball | Hold a ball and press F |
 | Teleport | Hold trigger pointing at the ground, release to jump there | — |
 
 **Hand tracking (no controllers):** put the controllers down and the Quest switches to your hands.
