@@ -24,7 +24,14 @@ WebXR needs HTTPS, so host the repo with GitHub Pages:
 | Turn / look | Right stick (snap turn) | Drag the mouse |
 | Pet | Grip or trigger with your hand near a pet, or just stroke it | Click a nearby pet |
 | Ball | Grip a ball, or point at one and grip to pull it to your hand. Swing and let go to throw | Click a ball to pick it up, click again to throw |
+| Teleport | Hold trigger pointing at the ground, release to jump there | — |
+
+**Hand tracking (no controllers):** put the controllers down and the Quest switches to your hands.
+- Stroke or pat a pet with your palm.
+- Pinch a ball to grab it, then swing and open your fingers to throw.
+- Point at a far-away ball and pinch to pull it to your hand.
+- Point at the ground, pinch and release to teleport.
 
 There's a waist-height table of tennis balls next to where you start.
 
-Each game is a single `index.html` that loads three.js from a CDN.
+Games load three.js from a CDN. Pet Park's animal models are in `pet-park/models/` (CC0, see CREDITS.md).
