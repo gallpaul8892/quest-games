@@ -1,0 +1,1097 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello World — Quest 3 Pet Park</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b1020; color: #e8ecff; font-family: system-ui, sans-serif; overflow: hidden; }
+  #info { position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 13px; line-height: 1.5; opacity: .85; pointer-events: none; padding: 0 12px; }
+  canvas { touch-action: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="info">
+  <b>Quest 3:</b> “Enter VR” · left stick walk · right stick turn · grip/trigger near a pet = pet it · grip a ball (or point at one and grip to pull it to your hand), swing and let go to throw<br>
+  <b>Desktop:</b> WASD walk · drag to look · click a nearby pet to pet it · click a ball to pick it up, click again to throw
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
+
+const rand = (a = 0, b = 1) => a + Math.random() * (b - a);
+const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// ---------- Scene ----------
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, 14, 30);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 60);
+camera.position.set(0, 1.6, 0);
+camera.rotation.order = 'YXZ';
+
+const dolly = new THREE.Group();
+dolly.position.set(0, 0, 1.5);
+dolly.add(camera);
+scene.add(dolly);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+scene.add(new THREE.HemisphereLight(0xcfe0ff, 0x304030, 1.4));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(2, 5, 1);
+scene.add(sun);
+
+const ARENA = 9.5;
+const ground = new THREE.Mesh(new THREE.CircleGeometry(13, 64),
+  new THREE.MeshLambertMaterial({ color: 0x2a5236 }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+const grid = new THREE.GridHelper(26, 52, 0x3f7a55, 0x30603f);
+grid.position.y = 0.002;
+scene.add(grid);
+
+const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+const UP = new THREE.Vector3(0, 1, 0);
+const clock = new THREE.Clock();
+const playerPos = new THREE.Vector3();
+
+// ---------- Text helpers ----------
+function drawPanel(canvas, text, fontPx) {
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, canvas.width, canvas.height);
+  g.fillStyle = 'rgba(20,28,60,0.88)';
+  g.beginPath(); g.roundRect(6, 6, canvas.width - 12, canvas.height - 12, canvas.height * 0.18); g.fill();
+  g.strokeStyle = '#7f8cff'; g.lineWidth = 5; g.stroke();
+  g.fillStyle = '#ffffff';
+  g.font = `bold ${fontPx}px system-ui, sans-serif`;
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(text, canvas.width / 2, canvas.height / 2 + fontPx * 0.04);
+}
+function makeTextPanel(text, w, h, fontPx, worldW) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  drawPanel(c, text, fontPx);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(worldW, worldW * h / w),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true }));
+  mesh.userData.setText = (t) => { drawPanel(c, t, fontPx); tex.needsUpdate = true; };
+  return mesh;
+}
+function makeTextSprite(text, w, h, fontPx, worldW) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  drawPanel(c, text, fontPx);
+  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+  s.scale.set(worldW, worldW * h / w, 1);
+  return s;
+}
+
+const hello = makeTextPanel('Hello, World!', 1024, 256, 130, 1.6);
+hello.position.set(0, 2.1, -2.5);
+scene.add(hello);
+const scorePanel = makeTextPanel('', 1700, 128, 46, 2.3);
+scorePanel.position.set(0, 1.75, -2.5);
+scene.add(scorePanel);
+
+const cube = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.3),
+  new THREE.MeshStandardMaterial({ color: 0xff6a3d, roughness: 0.4, metalness: 0.2 }));
+cube.position.set(-1.8, 1.4, -2.3);
+scene.add(cube);
+
+const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0 };
+function updateScore() {
+  scorePanel.userData.setText(`Pets: ${stats.pets}  ·  Fetches: ${stats.fetches}  ·  Cat scuffles: ${stats.catScuffles}  ·  Dog pile-ups: ${stats.dogScuffles}`);
+}
+
+// ---------- Ball table (waist height, so you don't have to bend down) ----------
+const TABLE = { x: 0.55, z: 1.0, r: 0.32, top: 0.85 };
+{
+  const wood = new THREE.MeshLambertMaterial({ color: 0x8a5a33 });
+  const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.09, TABLE.top - 0.04, 12), wood);
+  leg.position.set(TABLE.x, (TABLE.top - 0.04) / 2, TABLE.z);
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(TABLE.r + 0.03, TABLE.r + 0.03, 0.04, 24), wood);
+  top.position.set(TABLE.x, TABLE.top - 0.02, TABLE.z);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(TABLE.r + 0.03, 0.015, 6, 32), wood);
+  rim.rotation.x = Math.PI / 2; rim.position.set(TABLE.x, TABLE.top + 0.01, TABLE.z);
+  scene.add(leg, top, rim);
+  const sign = makeTextSprite('Balls! Grab & throw', 512, 128, 52, 0.5);
+  sign.position.set(TABLE.x, TABLE.top + 0.45, TABLE.z);
+  scene.add(sign);
+}
+
+// ---------- Audio (all synthesised) ----------
+let actx = null;
+function audio() {
+  if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+  if (actx.state === 'suspended') actx.resume();
+  return actx;
+}
+const audioOK = () => actx && actx.state === 'running';
+const lastSnd = {};
+function canPlay(type, gap) {
+  const t = clock.elapsedTime;
+  if ((lastSnd[type] ?? -99) + gap > t) return false;
+  lastSnd[type] = t; return true;
+}
+const volAt = (pos) => Math.min(1, 1.8 / (1 + pos.distanceTo(playerPos)));
+function env(g, t0, peak, attack, hold, release) {
+  g.gain.setValueAtTime(0.0001, t0);
+  g.gain.exponentialRampToValueAtTime(peak, t0 + attack);
+  g.gain.setValueAtTime(peak, t0 + attack + hold);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + attack + hold + release);
+}
+function bark(vol = 1, pitch = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  for (let k = 0; k < 2; k++) {
+    const t0 = t + k * 0.2;
+    const o = c.createOscillator(); o.type = 'sawtooth';
+    o.frequency.setValueAtTime(430 * pitch, t0);
+    o.frequency.exponentialRampToValueAtTime(150 * pitch, t0 + 0.13);
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1300;
+    const g = c.createGain(); env(g, t0, 0.35 * vol, 0.012, 0, 0.15);
+    o.connect(f).connect(g).connect(c.destination); o.start(t0); o.stop(t0 + 0.18);
+  }
+}
+function yip(vol = 1, pitch = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const o = c.createOscillator(); o.type = 'triangle';
+  o.frequency.setValueAtTime(900 * pitch, t);
+  o.frequency.exponentialRampToValueAtTime(480 * pitch, t + 0.09);
+  const g = c.createGain(); env(g, t, 0.3 * vol, 0.008, 0, 0.09);
+  o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.12);
+}
+function meow(vol = 1, pitch = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const o = c.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(520 * pitch, t);
+  o.frequency.linearRampToValueAtTime(820 * pitch, t + 0.25);
+  o.frequency.linearRampToValueAtTime(460 * pitch, t + 0.62);
+  const f = c.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 3;
+  f.frequency.setValueAtTime(900, t);
+  f.frequency.linearRampToValueAtTime(1900, t + 0.25);
+  f.frequency.linearRampToValueAtTime(700, t + 0.62);
+  const g = c.createGain(); env(g, t, 0.4 * vol, 0.05, 0.4, 0.2);
+  o.connect(f).connect(g).connect(c.destination); o.start(t); o.stop(t + 0.7);
+}
+function mrrp(vol = 1, pitch = 1) {           // playful cat trill
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const o = c.createOscillator(); o.type = 'square';
+  o.frequency.setValueAtTime(560 * pitch, t);
+  o.frequency.linearRampToValueAtTime(720 * pitch, t + 0.22);
+  const lfo = c.createOscillator(); lfo.frequency.value = 28;
+  const lg = c.createGain(); lg.gain.value = 40;
+  lfo.connect(lg).connect(o.frequency);
+  const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 1500;
+  const g = c.createGain(); env(g, t, 0.18 * vol, 0.02, 0.15, 0.08);
+  o.connect(f).connect(g).connect(c.destination);
+  o.start(t); lfo.start(t); o.stop(t + 0.3); lfo.stop(t + 0.3);
+}
+function boing(vol = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const o = c.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(260, t);
+  o.frequency.exponentialRampToValueAtTime(520, t + 0.08);
+  const g = c.createGain(); env(g, t, 0.15 * vol, 0.005, 0, 0.12);
+  o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.15);
+}
+
+// ---------- Particles: hearts, dust puffs, stars ----------
+function canvasTex(draw) {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  draw(c.getContext('2d'));
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const TEX = {
+  heart: canvasTex(g => {
+    g.fillStyle = '#ff4d7a'; g.beginPath(); g.moveTo(64, 112);
+    g.bezierCurveTo(8, 72, 8, 18, 40, 18); g.bezierCurveTo(54, 18, 64, 30, 64, 40);
+    g.bezierCurveTo(64, 30, 74, 18, 88, 18); g.bezierCurveTo(120, 18, 120, 72, 64, 112); g.fill();
+  }),
+  puff: canvasTex(g => {
+    const gr = g.createRadialGradient(64, 64, 4, 64, 64, 60);
+    gr.addColorStop(0, 'rgba(255,255,255,0.95)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.beginPath(); g.arc(64, 64, 60, 0, Math.PI * 2); g.fill();
+  }),
+  star: canvasTex(g => {
+    g.fillStyle = '#ffd84a'; g.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const r = i % 2 ? 22 : 58, a = i * Math.PI / 5 - Math.PI / 2;
+      g.lineTo(64 + Math.cos(a) * r, 64 + Math.sin(a) * r);
+    }
+    g.closePath(); g.fill();
+  }),
+};
+const particles = [];
+function spawnParticle(type, pos) {
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: TEX[type], transparent: true, depthWrite: false }));
+  s.position.copy(pos);
+  const u = { type, age: 0 };
+  if (type === 'heart') { u.life = 1.3; u.size = rand(0.1, 0.15); u.vel = new THREE.Vector3(rand(-.12, .12), 0.45, rand(-.12, .12)); }
+  if (type === 'puff')  { u.life = 0.6; u.size = rand(0.12, 0.2); u.vel = new THREE.Vector3(rand(-.4, .4), rand(.1, .4), rand(-.4, .4)); }
+  if (type === 'star')  { u.life = 0.8; u.size = rand(0.07, 0.1); u.vel = new THREE.Vector3(rand(-.6, .6), rand(.8, 1.3), rand(-.6, .6)); }
+  s.scale.setScalar(u.size);
+  s.userData = u; scene.add(s); particles.push(s);
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const s = particles[i], u = s.userData;
+    u.age += dt;
+    s.position.addScaledVector(u.vel, dt);
+    const k = u.age / u.life;
+    if (u.type === 'puff') { s.scale.setScalar(u.size * (1 + k * 1.5)); s.material.opacity = 0.7 * (1 - k); }
+    else if (u.type === 'star') { u.vel.y -= 2.5 * dt; s.material.rotation += dt * 6; s.material.opacity = 1 - k * k; }
+    else s.material.opacity = 1 - k;
+    if (u.age > u.life) { scene.remove(s); s.material.dispose(); particles.splice(i, 1); }
+  }
+}
+
+// ---------- Shared geometry/material caches ----------
+const geoCache = {}, matCache = {};
+const G = (key, make) => geoCache[key] ??= make();
+const M = (color) => matCache[color] ??= new THREE.MeshLambertMaterial({ color });
+const BLACK = new THREE.MeshPhongMaterial({ color: 0x111111, shininess: 80 });
+const PINK = M(0xff8fa8);
+
+// ---------- Animals ----------
+function makeAnimal({ kind, name, color, accent, x, z }) {
+  const isDog = kind === 'dog';
+  const s = isDog ? 1 : 0.72;
+  const k = kind;
+  const fur = M(color), acc = M(accent);
+
+  const group = new THREE.Group();
+  const root = new THREE.Group();
+  group.add(root);
+
+  const legH = 0.26 * s, bodyR = 0.13 * s, bodyL = 0.52 * s;
+
+  const body = new THREE.Mesh(G(k + 'body', () => new THREE.CapsuleGeometry(bodyR, bodyL - 2 * bodyR, 6, 14)), fur);
+  body.rotation.x = Math.PI / 2;
+  body.position.y = legH + bodyR;
+  root.add(body);
+
+  const legs = [];
+  const legGeo = G(k + 'leg', () => { const g = new THREE.CylinderGeometry(0.034 * s, 0.03 * s, legH, 8); g.translate(0, -legH / 2, 0); return g; });
+  const pawGeo = G(k + 'paw', () => { const g = new THREE.SphereGeometry(0.038 * s, 8, 6); g.scale(1, 0.6, 1.3); g.translate(0, -legH, 0); return g; });
+  const lx = bodyR * 0.6, lz = bodyL / 2 - bodyR * 0.75;
+  for (const [px, pz] of [[lx, lz], [-lx, lz], [lx, -lz], [-lx, -lz]]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(px, legH + 0.02 * s, pz);
+    pivot.add(new THREE.Mesh(legGeo, fur), new THREE.Mesh(pawGeo, acc));
+    root.add(pivot); legs.push(pivot);
+  }
+
+  const head = new THREE.Group();
+  head.position.set(0, legH + bodyR * 2 + 0.03 * s, bodyL / 2 + 0.02 * s);
+  root.add(head);
+  const skull = new THREE.Mesh(G(k + 'skull', () => {
+    const g = new THREE.SphereGeometry(0.12 * s, 18, 14); if (!isDog) g.scale(1.1, 0.95, 1); return g;
+  }), fur);
+  head.add(skull);
+  const eyeGeo = G(k + 'eye', () => new THREE.SphereGeometry(0.021 * s, 10, 8));
+  for (const sx of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, BLACK);
+    eye.position.set(sx * 0.05 * s, 0.03 * s, 0.1 * s);
+    head.add(eye);
+  }
+  let tongue = null;
+  if (isDog) {
+    const snout = new THREE.Mesh(G('dsnout', () => new THREE.BoxGeometry(0.09, 0.07, 0.1)), acc);
+    snout.position.set(0, -0.025, 0.13); head.add(snout);
+    const nose = new THREE.Mesh(G('dnose', () => new THREE.SphereGeometry(0.026, 10, 8)), BLACK);
+    nose.position.set(0, 0, 0.18); head.add(nose);
+    const earGeo = G('dear', () => { const g = new THREE.BoxGeometry(0.035, 0.13, 0.08); g.translate(0, -0.05, 0); return g; });
+    for (const sx of [-1, 1]) {
+      const ear = new THREE.Mesh(earGeo, acc);
+      ear.position.set(sx * 0.11, 0.06, -0.01); ear.rotation.z = sx * 0.3;
+      head.add(ear);
+    }
+    tongue = new THREE.Mesh(G('dtongue', () => new THREE.BoxGeometry(0.04, 0.012, 0.07)), PINK);
+    tongue.position.set(0, -0.07, 0.15); tongue.rotation.x = 0.5; tongue.visible = false;
+    head.add(tongue);
+  } else {
+    const muzzle = new THREE.Mesh(G('cmuzzle', () => { const g = new THREE.SphereGeometry(0.045 * s, 12, 8); g.scale(1.35, 0.8, 0.8); return g; }), acc);
+    muzzle.position.set(0, -0.035 * s, 0.1 * s); head.add(muzzle);
+    const nose = new THREE.Mesh(G('cnose', () => new THREE.SphereGeometry(0.016 * s, 8, 6)), PINK);
+    nose.position.set(0, -0.012 * s, 0.135 * s); head.add(nose);
+    const earGeo = G('cear', () => new THREE.ConeGeometry(0.05 * s, 0.11 * s, 4));
+    for (const sx of [-1, 1]) {
+      const ear = new THREE.Mesh(earGeo, fur);
+      ear.position.set(sx * 0.07 * s, 0.115 * s, 0); ear.rotation.z = -sx * 0.3;
+      head.add(ear);
+    }
+    const whiskers = G('cwhisk', () => {
+      const pts = [];
+      for (const sx of [-1, 1]) for (const dy of [-0.012, 0, 0.012])
+        pts.push(new THREE.Vector3(sx * 0.04 * s, -0.03 * s, 0.12 * s), new THREE.Vector3(sx * 0.15 * s, (-0.03 + dy * 2.5) * s, 0.1 * s));
+      return new THREE.BufferGeometry().setFromPoints(pts);
+    });
+    head.add(new THREE.LineSegments(whiskers, new THREE.LineBasicMaterial({ color: 0xffffff })));
+  }
+
+  const tail = new THREE.Group();
+  tail.position.set(0, legH + bodyR * 1.6, -bodyL / 2 + 0.02 * s);
+  root.add(tail);
+  const tailMesh = new THREE.Mesh(G(k + 'tail', () => {
+    const tl = isDog ? 0.2 : 0.34;
+    const g = new THREE.CylinderGeometry(isDog ? 0.022 : 0.016, isDog ? 0.034 : 0.022, tl, 8);
+    g.translate(0, tl / 2, 0); return g;
+  }), fur);
+  tailMesh.rotation.x = isDog ? -0.7 : -0.3;
+  tail.add(tailMesh);
+
+  const shadow = new THREE.Mesh(G(k + 'shadow', () => new THREE.CircleGeometry(0.28 * s, 16)),
+    G('shadowMat', () => new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3, depthWrite: false })));
+  shadow.rotation.x = -Math.PI / 2; shadow.position.y = 0.004; shadow.scale.set(0.8, 1.4, 1);
+  group.add(shadow);
+
+  const label = makeTextSprite(`${name}: pet me!`, 512, 128, 56, 0.55);
+  label.position.y = legH + bodyR * 2 + 0.38;
+  label.visible = false;
+  group.add(label);
+
+  const variation = rand(0.85, 1.15);
+  group.scale.setScalar(variation);
+  group.position.set(x, 0, z);
+  group.rotation.y = rand(0, Math.PI * 2);
+  scene.add(group);
+
+  const a = {
+    kind, name, isDog, group, root, body, head, legs, tail, tongue, label,
+    size: s * variation,
+    mouth: new THREE.Vector3(0, -0.05, 0.19),
+    speed: (isDog ? 1.1 : 0.8) * rand(0.9, 1.1), fast: (isDog ? 2.8 : 2.6) * rand(0.9, 1.1),
+    voice: rand(0.8, 1.25), seed: rand(0, 100),
+    mode: 'wander', target: null, idleT: rand(0, 2), zoom: false,
+    curSpeed: 0, phase: rand(0, 6), petTimer: 0, heartT: 0, lastSound: -10, stroke: 0, headTilt: 0,
+    ball: null, carrying: null, fight: null, followTarget: null, followT: 0, chaseT: 0, excite: 1, bats: 0, pounce: 0,
+  };
+  group.traverse(o => { o.userData.animal = a; });
+  return a;
+}
+
+const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy'];
+const CAT_NAMES = ['Mochi', 'Tilly', 'Smudge', 'Willow', 'Haggis', 'Pixel', 'Clover', 'Nutmeg', 'Luna', 'Pudding', 'Socks'];
+const DOG_COATS = [[0xb5763a, 0xf1dcc0], [0x2b2523, 0xc9a27a], [0xeee4d2, 0x9a7b5a], [0xd9a441, 0xf6e2b5], [0x7d7f86, 0xe9e9ea], [0x8a4b22, 0x2a1a10]];
+const CAT_COATS = [[0xd9822b, 0xfbeedd], [0x6f7076, 0xd8d8dc], [0x262626, 0xf2f2f2], [0xf0f0f0, 0xffc9d1], [0xa58c6f, 0xefe3d0], [0x55504a, 0xc49a6c]];
+function spawnSpot() {
+  const ang = rand(0, Math.PI * 2), r = rand(2.5, 8.5);
+  return { x: Math.cos(ang) * r, z: Math.sin(ang) * r };
+}
+const dogs = DOG_NAMES.map((name, i) => {
+  const [color, accent] = DOG_COATS[i % DOG_COATS.length];
+  return makeAnimal({ kind: 'dog', name, color, accent, ...spawnSpot() });
+});
+const cats = CAT_NAMES.map((name, i) => {
+  const [color, accent] = CAT_COATS[i % CAT_COATS.length];
+  return makeAnimal({ kind: 'cat', name, color, accent, ...spawnSpot() });
+});
+const animals = [...dogs, ...cats];
+
+// ---------- Balls ----------
+const balls = [];
+function makeBall(color, stripe, r, x, y, z) {
+  const mesh = new THREE.Mesh(G('ball' + r, () => new THREE.SphereGeometry(r, 16, 12)), M(color));
+  const seam = new THREE.Mesh(G('seam' + r, () => new THREE.TorusGeometry(r * 1.0, r * 0.1, 4, 24)), M(stripe));
+  seam.rotation.x = Math.PI / 2.4;
+  mesh.add(seam);
+  mesh.position.set(x, y, z);
+  scene.add(mesh);
+  const b = { mesh, r, vel: new THREE.Vector3(), state: 'free', thrown: false, carrier: null, hand: null, fight: null };
+  balls.push(b);
+  return b;
+}
+// tennis balls on the table
+for (let i = 0; i < 4; i++) {
+  const ang = i * Math.PI / 2;
+  makeBall(0xc8e640, 0xffffff, 0.07, TABLE.x + Math.cos(ang) * 0.14, TABLE.top + 0.07, TABLE.z + Math.sin(ang) * 0.14);
+}
+// colourful balls around the park
+const BALL_COLOURS = [[0xff5a5a, 0xffffff], [0x4a8cff, 0xffe14a], [0xff7ad9, 0xffffff], [0x9b6bff, 0x7cf0c0], [0xffa63d, 0x4a8cff], [0x5ad17a, 0xffffff], [0xc8e640, 0xffffff], [0xff5a5a, 0x4a8cff]];
+for (const [c, st] of BALL_COLOURS) { const p = spawnSpot(); makeBall(c, st, 0.06, p.x, 0.06, p.z); }
+
+const ballWorld = (b, out) => b.mesh.getWorldPosition(out);
+
+function updateBalls(dt) {
+  for (const b of balls) {
+    if (b.state !== 'free') continue;
+    const p = b.mesh.position;
+    b.vel.y -= 9.8 * dt;
+    p.addScaledVector(b.vel, dt);
+    const tdx = p.x - TABLE.x, tdz = p.z - TABLE.z;
+    const onTable = tdx * tdx + tdz * tdz < TABLE.r * TABLE.r && p.y - b.r > TABLE.top - 0.15;
+    const floorY = onTable ? TABLE.top + b.r : b.r;
+    if (p.y < floorY) {
+      p.y = floorY;
+      if (b.vel.y < -1.5 && canPlay('boing', 0.08)) boing(volAt(p) * 0.6);
+      if (b.vel.y < 0) b.vel.y = -b.vel.y * 0.5;
+      if (Math.abs(b.vel.y) < 0.4) b.vel.y = 0;
+      const f = Math.exp(-(onTable ? 5 : 1.1) * dt);
+      b.vel.x *= f; b.vel.z *= f;
+      const hs = Math.hypot(b.vel.x, b.vel.z);
+      if (hs > 0.01) {
+        tmpV.set(b.vel.z, 0, -b.vel.x).normalize();
+        b.mesh.rotateOnWorldAxis(tmpV, hs * dt / b.r);
+      }
+    }
+    const pr = Math.hypot(p.x, p.z), wall = ARENA + 2;
+    if (pr > wall) {
+      const nx = p.x / pr, nz = p.z / pr;
+      p.x = nx * wall; p.z = nz * wall;
+      const vn = b.vel.x * nx + b.vel.z * nz;
+      if (vn > 0) { b.vel.x -= 1.6 * vn * nx; b.vel.z -= 1.6 * vn * nz; }
+    }
+  }
+}
+
+// ---------- Ball handling (player + dogs) ----------
+const hands = [{ ball: null, btn: null, hist: [] }, { ball: null, btn: null, hist: [] }];
+let deskBall = null;
+
+function releaseFromCarrier(b) {
+  if (b.state === 'carried' && b.carrier) {
+    const dog = b.carrier;
+    dog.carrying = null;
+    toWander(dog);
+    dog.petTimer = 1.2;      // happy to give it up to you
+  }
+  b.carrier = null;
+}
+function grabBall(b, handIndex) {
+  releaseFromCarrier(b);
+  b.state = 'held';
+  if (b.fight) resolveFight(b.fight);
+  b.thrown = false; b.vel.set(0, 0, 0); b.hand = handIndex;
+  const holder = handIndex >= 0 ? grips[handIndex] : camera;
+  holder.add(b.mesh);
+  b.mesh.scale.setScalar(1);
+  b.mesh.quaternion.identity();
+  if (handIndex >= 0) { b.mesh.position.set(0, -0.01, -0.03); hands[handIndex].ball = b; }
+  else { b.mesh.position.set(0.22, -0.2, -0.5); deskBall = b; }
+}
+function throwBall(b, vel) {
+  scene.attach(b.mesh);
+  b.mesh.scale.setScalar(1);
+  b.state = 'free'; b.hand = null;
+  b.vel.copy(vel);
+  if (vel.length() > 1.2) { b.thrown = true; b.tackles = 0; dogsChase(b); }
+}
+function dogsChase(b) {
+  let barks = 0;
+  for (const d of dogs) {
+    if (d.mode === 'fetch' || d.mode === 'fight') continue;
+    toWander(d);
+    d.mode = 'chase'; d.ball = b; d.chaseT = 0; d.excite = rand(0.92, 1.08);
+    if (barks < 3 && Math.random() < 0.4) {
+      barks++;
+      setTimeout(() => { d.group.getWorldPosition(tmpV2); bark(volAt(tmpV2) * 0.8, d.voice); }, rand(0, 400));
+    }
+  }
+}
+function dogGrab(a, b) {
+  b.state = 'carried'; b.carrier = a; b.thrown = false; b.vel.set(0, 0, 0);
+  a.head.add(b.mesh);
+  b.mesh.position.copy(a.mouth);
+  b.mesh.scale.setScalar(1 / a.group.scale.x);
+  a.carrying = b; a.mode = 'fetch'; a.ball = null;
+  for (const d of dogs) {
+    if (d !== a && d.mode === 'chase' && d.ball === b) startFollow(d, a);
+  }
+}
+function dogDrop(a) {
+  const b = a.carrying;
+  if (!b) return;
+  scene.attach(b.mesh);
+  b.mesh.scale.setScalar(1);
+  b.state = 'free'; b.carrier = null;
+  tmpV.set(playerPos.x - b.mesh.position.x, 0, playerPos.z - b.mesh.position.z).normalize();
+  b.vel.set(tmpV.x * 0.7, 1.2, tmpV.z * 0.7);
+  a.carrying = null;
+  toWander(a); a.idleT = 1.5; a.petTimer = 1.6; a.heartT = 0;
+  stats.fetches++; updateScore();
+  bark(volAt(b.mesh.position), a.voice);
+}
+function startFollow(d, leader) {
+  d.mode = 'follow'; d.followTarget = leader; d.followT = rand(1.5, 3); d.ball = null;
+}
+function toWander(a) {
+  a.mode = 'wander'; a.ball = null; a.target = null; a.fight = null; a.followTarget = null;
+  a.idleT = rand(0.3, 1.2); a.zoom = false; a.pounce = 0;
+}
+
+// ---------- Play-fights (cats scuffle, dogs pile up over a ball) ----------
+const fights = [];
+function startFight(type, members, center, ball = null) {
+  const f = { type, members: [], center: center.clone(), ball, phase: type === 'cat' ? 'approach' : 'tussle',
+              timer: type === 'cat' ? 0 : rand(1.6, 2.8), puffT: 0, dir: Math.random() < 0.5 ? 1 : -1 };
+  f.center.y = 0;
+  fights.push(f);
+  if (ball) ball.fight = f;
+  for (const m of members) joinFight(f, m);
+  if (type === 'dog') { stats.dogScuffles++; updateScore(); }
+  return f;
+}
+function joinFight(f, a) {
+  a.mode = 'fight'; a.fight = f; a.ball = null;
+  a.orbit = Math.atan2(a.group.position.z - f.center.z, a.group.position.x - f.center.x);
+  f.members.push(a);
+}
+function resolveFight(f) {
+  const i = fights.indexOf(f);
+  if (i < 0) return;
+  fights.splice(i, 1);
+  if (f.ball) f.ball.fight = null;
+  if (f.type === 'cat') {
+    for (const c of f.members) {
+      toWander(c);
+      if (f.phase === 'tussle') {   // dash off in opposite directions
+        tmpV.set(c.group.position.x - f.center.x, 0, c.group.position.z - f.center.z).normalize();
+        c.target = new THREE.Vector3(c.group.position.x + tmpV.x * 2.2, 0, c.group.position.z + tmpV.z * 2.2);
+        c.zoom = true; c.idleT = 0;
+      }
+    }
+    return;
+  }
+  // dog pile-up: someone wins the ball
+  const b = f.ball;
+  const winner = pick(f.members);
+  for (const d of f.members) d.fight = null;
+  if (b && b.state === 'free' && winner.group.position.distanceTo(b.mesh.position) < 2.5) {
+    for (const d of f.members) toWander(d);
+    for (const d of f.members) if (d !== winner) { d.mode = 'chase'; d.ball = b; }
+    dogGrab(winner, b);   // the losers switch to following the winner
+    winner.petTimer = 0;
+  } else if (b && b.state === 'free' && b.thrown) {
+    for (const d of f.members) { toWander(d); d.mode = 'chase'; d.ball = b; d.chaseT = 0; }
+  } else {
+    for (const d of f.members) {
+      toWander(d);
+      if (b && b.state === 'carried' && b.carrier) startFollow(d, b.carrier);
+    }
+  }
+}
+function updateFights(dt) {
+  for (const f of [...fights]) {
+    if (f.type === 'cat' && f.phase === 'approach') {
+      const [a, b] = f.members;
+      f.timer += dt;
+      const d = a.group.position.distanceTo(b.group.position);
+      if (d < 0.55) {
+        f.phase = 'tussle'; f.timer = rand(2, 3.5);
+        f.center.set((a.group.position.x + b.group.position.x) / 2, 0, (a.group.position.z + b.group.position.z) / 2);
+        for (const m of f.members) m.orbit = Math.atan2(m.group.position.z - f.center.z, m.group.position.x - f.center.x);
+        stats.catScuffles++; updateScore();
+      } else if (f.timer > 6) resolveFight(f);
+      continue;
+    }
+    // tussle
+    f.timer -= dt;
+    if (f.type === 'dog') {
+      const b = f.ball;
+      if (!b || b.state !== 'free') { resolveFight(f); continue; }
+      f.center.x += (b.mesh.position.x - f.center.x) * (1 - Math.exp(-3 * dt));
+      f.center.z += (b.mesh.position.z - f.center.z) * (1 - Math.exp(-3 * dt));
+      if (Math.random() < dt * 2.5) b.vel.set(rand(-1, 1), rand(0.5, 1.2), rand(-1, 1));   // ball gets bumped about
+    }
+    f.puffT -= dt;
+    if (f.puffT <= 0) {
+      f.puffT = 0.09;
+      tmpV.set(f.center.x + rand(-.25, .25), rand(0.08, 0.3), f.center.z + rand(-.25, .25));
+      spawnParticle('puff', tmpV);
+      if (Math.random() < 0.3) spawnParticle('star', tmpV.setY(0.35));
+    }
+    if (Math.random() < dt * 3) {
+      const m = pick(f.members);
+      if (f.type === 'cat' ? canPlay('mrrp', 0.25) : canPlay('yip', 0.2)) {
+        (f.type === 'cat' ? mrrp : yip)(volAt(f.center), m.voice);
+      }
+    }
+    if (f.timer <= 0) resolveFight(f);
+  }
+}
+
+// ---------- Animal brain + animation ----------
+function wrapAngle(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
+function turnTo(a, heading, dt, rate) {
+  a.group.rotation.y += wrapAngle(heading - a.group.rotation.y) * (1 - Math.exp(-rate * dt));
+}
+function steer(a, x, z, dt, rate) {
+  const dx = x - a.group.position.x, dz = z - a.group.position.z;
+  turnTo(a, Math.atan2(dx, dz), dt, rate);
+  return Math.hypot(dx, dz);
+}
+function chooseTarget(a, player) {
+  // sometimes go and play with a ball
+  if (Math.random() < (a.isDog ? 0.12 : 0.3)) {
+    let best = null, bd = 6;
+    for (const b of balls) {
+      if (b.state !== 'free' || b.thrown || b.mesh.position.y > 0.3) continue;
+      const players = animals.filter(o => o.mode === 'play' && o.ball === b).length;
+      if (players >= 2) continue;
+      const d = b.mesh.position.distanceTo(a.group.position);
+      if (d < bd) { bd = d; best = b; }
+    }
+    if (best) { a.mode = 'play'; a.ball = best; a.bats = 2 + Math.floor(rand(0, 3)); return; }
+  }
+  const distToPlayer = Math.hypot(player.x - a.group.position.x, player.z - a.group.position.z);
+  if (a.isDog && distToPlayer > 3 && Math.random() < 0.1) {
+    a.target = new THREE.Vector3(player.x + rand(-.6, .6), 0, player.z + rand(-.6, .6));
+  } else {
+    const ang = rand(0, Math.PI * 2), rad = Math.sqrt(Math.random()) * ARENA;
+    a.target = new THREE.Vector3(Math.cos(ang) * rad, 0, Math.sin(ang) * rad);
+  }
+  a.zoom = Math.random() < (a.isDog ? 0.2 : 0.3);
+}
+
+function updateAnimal(a, dt, t, player) {
+  const g = a.group, p = g.position;
+  const dxp = player.x - p.x, dzp = player.z - p.z, distP = Math.hypot(dxp, dzp);
+  a.petTimer = Math.max(0, a.petTimer - dt);
+
+  let want = 0, wagS = a.isDog ? 4 : 1.5, wagA = a.isDog ? 0.25 : 0.15;
+  let hop = 0, tilt = 0, lookUp = false, swipe = false, puff = 1, rear = 0, label = false, tongue = false, direct = false;
+
+  const happy = a.petTimer > 0 && (a.mode === 'wander' || a.mode === 'play' || a.mode === 'follow');
+  if (happy) {
+    if (a.mode !== 'wander') toWander(a);
+    turnTo(a, Math.atan2(dxp, dzp), dt, 6);
+    wagS = a.isDog ? 20 : 5; wagA = a.isDog ? 0.75 : 0.35;
+    tilt = Math.sin(t * 4) * 0.25; lookUp = true; tongue = true;
+    if (a.isDog) hop = Math.abs(Math.sin(t * 9)) * 0.035;
+    a.heartT -= dt;
+    if (a.heartT <= 0) { a.heartT = 0.28; a.head.getWorldPosition(tmpV); tmpV.y += 0.12; spawnParticle('heart', tmpV); }
+  } else switch (a.mode) {
+    case 'chase': {
+      const b = a.ball;
+      a.chaseT += dt;
+      if (!b || a.chaseT > 12) { toWander(a); break; }
+      if (b.state === 'held') {   // you picked it up: come and wait by you
+        toWander(a); a.target = new THREE.Vector3(player.x + rand(-1, 1), 0, player.z + rand(-1, 1)); a.idleT = 0; break;
+      }
+      if (b.state === 'carried') { if (b.carrier !== a) startFollow(a, b.carrier); break; }
+      const bp = b.mesh.position;
+      const d = steer(a, bp.x, bp.z, dt, 8);
+      want = d > 0.2 ? a.fast * a.excite : 0;
+      wagS = 14; wagA = 0.6; tongue = true;
+      if (b.fight) {
+        if (d < 1.0 && b.fight.members.length < 6) joinFight(b.fight, a);
+      } else if (d < 0.3 + 0.15 * a.size && bp.y < 0.45) {
+        const rivals = dogs.filter(o => o !== a && o.mode === 'chase' && o.ball === b &&
+          Math.hypot(o.group.position.x - bp.x, o.group.position.z - bp.z) < 2.2);
+        if (rivals.length) startFight('dog', [a, ...rivals], bp, b);
+        else dogGrab(a, b);
+      }
+      break;
+    }
+    case 'fetch': {
+      const d = steer(a, player.x, player.z, dt, 6);
+      want = a.speed * 1.4; wagS = 14; wagA = 0.6; lookUp = d < 2;
+      if (d < 1.0) dogDrop(a);
+      break;
+    }
+    case 'follow': {
+      a.followT -= dt;
+      const lead = a.followTarget;
+      if (a.followT <= 0 || !lead) { toWander(a); break; }
+      const d = steer(a, lead.group.position.x, lead.group.position.z, dt, 6);
+      want = d > 0.5 ? a.fast * 0.85 : 0;
+      // playful tackle: try to get the ball off the dog carrying it
+      if (lead.carrying && !lead.fight && d < 0.6 && (lead.carrying.tackles ?? 0) < 2 && Math.random() < dt * 0.15) {
+        const b = lead.carrying;
+        scene.attach(b.mesh); b.mesh.scale.setScalar(1);
+        b.state = 'free'; b.carrier = null; b.thrown = true; b.vel.set(rand(-.5, .5), 1, rand(-.5, .5));
+        b.tackles = (b.tackles ?? 0) + 1;
+        lead.carrying = null;
+        const crew = dogs.filter(o => o !== lead && o !== a && o.mode === 'follow' && o.followTarget === lead &&
+          o.group.position.distanceTo(lead.group.position) < 1.5).slice(0, 4);
+        startFight('dog', [lead, a, ...crew], b.mesh.position, b);
+      }
+      hop = Math.abs(Math.sin(t * 8 + a.seed)) * 0.04;
+      wagS = 14; wagA = 0.6; tongue = true;
+      break;
+    }
+    case 'play': {
+      const b = a.ball;
+      if (!b || b.state !== 'free' || b.thrown) { toWander(a); break; }
+      const bp = b.mesh.position;
+      const d = steer(a, bp.x, bp.z, dt, 7);
+      want = d > 0.25 * a.size + b.r ? a.fast * (a.isDog ? 0.7 : 0.6) : 0;
+      wagS = a.isDog ? 10 : 4; wagA = 0.4;
+      if (a.pounce > 0) {
+        a.pounce -= dt;
+        hop = Math.sin(Math.max(0, a.pounce) / 0.3 * Math.PI) * 0.08;
+        swipe = true;
+      } else if (d < 0.3 * a.size + b.r + 0.05 && bp.y < 0.3) {
+        const ang = g.rotation.y + rand(-1, 1), sp = rand(1.2, 3);
+        b.vel.set(Math.sin(ang) * sp, rand(0.6, 1.8), Math.cos(ang) * sp);
+        a.pounce = 0.3; a.bats--;
+        if (!a.isDog && canPlay('mrrp', 0.4) && Math.random() < 0.5) mrrp(volAt(p) * 0.7, a.voice);
+        if (a.bats <= 0) { toWander(a); a.idleT = rand(1, 3); }
+      }
+      break;
+    }
+    case 'fight': {
+      const f = a.fight;
+      if (!f) { toWander(a); break; }
+      if (f.phase === 'approach') {
+        const o = f.members.find(m => m !== a);
+        steer(a, o.group.position.x, o.group.position.z, dt, 6);
+        want = a.speed * 1.3; puff = 1.4; wagS = 6; wagA = 0.3;
+      } else {
+        direct = true;
+        a.orbit += f.dir * 2.4 * dt;
+        const R = (f.type === 'cat' ? 0.2 : 0.25) + 0.06 * f.members.length;
+        const tx = f.center.x + Math.cos(a.orbit) * R, tz = f.center.z + Math.sin(a.orbit) * R;
+        const k = 1 - Math.exp(-10 * dt);
+        p.x += (tx - p.x) * k; p.z += (tz - p.z) * k;
+        turnTo(a, Math.atan2(f.center.x - p.x, f.center.z - p.z), dt, 12);
+        hop = Math.abs(Math.sin(t * 11 + a.seed)) * 0.07;
+        swipe = true;
+        rear = 0.25 + 0.15 * Math.sin(t * 7 + a.seed);
+        puff = a.isDog ? 1 : 1.8;
+        wagS = a.isDog ? 18 : 8; wagA = a.isDog ? 0.7 : 0.4;
+        tongue = a.isDog;
+      }
+      break;
+    }
+    default: { // wander / idle / say hello
+      if (distP < 1.7) {
+        turnTo(a, Math.atan2(dxp, dzp), dt, 4);
+        wagS = a.isDog ? 11 : 3; wagA = a.isDog ? 0.5 : 0.25;
+        tilt = Math.sin(t * 1.3 + a.seed) * 0.12;
+        label = true; tongue = true; lookUp = true;
+        a.target = null; a.idleT = 0.4;
+      } else if (a.idleT > 0) {
+        a.idleT -= dt;
+      } else {
+        if (!a.target) chooseTarget(a, player);
+        if (a.mode !== 'wander' || !a.target) break;
+        const d = steer(a, a.target.x, a.target.z, dt, a.zoom ? 7 : 4);
+        if (d < 0.25) { a.target = null; a.zoom = false; a.idleT = rand(0.8, 3.3); }
+        else want = a.zoom ? a.fast : a.speed;
+      }
+    }
+  }
+
+  // Movement
+  if (!direct) {
+    a.curSpeed += (want - a.curSpeed) * (1 - Math.exp(-6 * dt));
+    p.x += Math.sin(g.rotation.y) * a.curSpeed * dt;
+    p.z += Math.cos(g.rotation.y) * a.curSpeed * dt;
+  } else a.curSpeed = 0;
+  const r = Math.hypot(p.x, p.z);
+  if (r > ARENA + 1) { p.x *= (ARENA + 1) / r; p.z *= (ARENA + 1) / r; }
+
+  // Animation
+  a.phase += (direct ? 1.2 : a.curSpeed) * dt * (a.isDog ? 9 : 12) / a.size;
+  const swing = direct ? 0.4 : Math.min(1, a.curSpeed / a.speed) * 0.7;
+  a.legs.forEach((leg, i) => { leg.rotation.x = Math.sin(a.phase + (i === 0 || i === 3 ? 0 : Math.PI)) * swing; });
+  if (swipe) {
+    a.legs[0].rotation.x = -1.0 - 0.5 * Math.sin(t * 16 + a.seed);
+    a.legs[1].rotation.x = -1.0 - 0.5 * Math.sin(t * 16 + a.seed + Math.PI);
+  }
+  a.root.rotation.x += (-rear - a.root.rotation.x) * (1 - Math.exp(-10 * dt));
+  a.root.position.y = Math.abs(Math.sin(a.phase)) * 0.02 * swing + hop + rear * 0.08;
+  a.tail.rotation.z = Math.sin(t * wagS + a.seed) * wagA;
+  const ts = a.tail.scale.x + (puff - a.tail.scale.x) * (1 - Math.exp(-8 * dt));
+  a.tail.scale.set(ts, 1, ts);
+  a.headTilt += (tilt - a.headTilt) * (1 - Math.exp(-5 * dt));
+  a.head.rotation.z = a.headTilt;
+  a.head.rotation.x += ((lookUp ? -0.25 : 0) - a.head.rotation.x) * (1 - Math.exp(-6 * dt));
+  if (a.tongue) a.tongue.visible = tongue && !a.carrying;
+  a.label.visible = label && a.petTimer <= 0;
+}
+
+function separateAnimals() {
+  for (let i = 0; i < animals.length; i++) {
+    const A = animals[i];
+    for (let j = i + 1; j < animals.length; j++) {
+      const B = animals[j];
+      if (A.fight && A.fight === B.fight) continue;
+      const p = A.group.position, q = B.group.position;
+      const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
+      const min = 0.28 * (A.size + B.size);
+      if (d > 0.0001 && d < min) {
+        const push = (min - d) / 2, nx = dx / d, nz = dz / d;
+        const wa = A.fight?.phase === 'tussle' ? 0 : 1, wb = B.fight?.phase === 'tussle' ? 0 : 1;
+        p.x -= nx * push * wa; p.z -= nz * push * wa;
+        q.x += nx * push * wb; q.z += nz * push * wb;
+      }
+    }
+  }
+}
+
+let catFightTimer = 3;
+function director(dt) {
+  catFightTimer -= dt;
+  if (catFightTimer > 0) return;
+  catFightTimer = rand(2, 5);
+  if (fights.filter(f => f.type === 'cat').length >= 2) return;
+  const free = cats.filter(c => c.mode === 'wander' && c.petTimer <= 0).sort(() => Math.random() - 0.5);
+  for (const c of free) {
+    const partner = free.find(o => o !== c && o.group.position.distanceTo(c.group.position) < 4);
+    if (partner) {
+      tmpV.addVectors(c.group.position, partner.group.position).multiplyScalar(0.5);
+      startFight('cat', [c, partner], tmpV);
+      if (canPlay('meow', 0.5)) meow(volAt(tmpV) * 0.6, c.voice * 1.1);
+      return;
+    }
+  }
+}
+
+function animalNear(pos, maxD) {
+  let best = null, bd = maxD;
+  for (const a of animals) {
+    a.head.getWorldPosition(tmpV2); let d = pos.distanceTo(tmpV2);
+    a.body.getWorldPosition(tmpV2); d = Math.min(d, pos.distanceTo(tmpV2));
+    if (d < bd) { bd = d; best = a; }
+  }
+  return best;
+}
+function ballNear(pos, maxD) {
+  let best = null, bd = maxD;
+  for (const b of balls) {
+    if (b.state === 'held') continue;
+    const d = pos.distanceTo(ballWorld(b, tmpV2));
+    if (d < bd) { bd = d; best = b; }
+  }
+  return best;
+}
+function ballOnRay(ray, maxDist) {
+  let best = null, bestAlong = maxDist;
+  for (const b of balls) {
+    if (b.state === 'held') continue;
+    ballWorld(b, tmpV2);
+    const along = tmpV.copy(tmpV2).sub(ray.origin).dot(ray.direction);
+    if (along < 0 || along > bestAlong) continue;
+    const tol = 0.12 + along * 0.04;
+    if (ray.distanceSqToPoint(tmpV2) < tol * tol) { bestAlong = along; best = b; }
+  }
+  return best;
+}
+
+function pet(a, ctrlIndex, stroking) {
+  if (a.fight && a.fight.phase === 'tussle') resolveFight(a.fight);   // a pat breaks up the scuffle
+  const fresh = a.petTimer <= 0;
+  a.petTimer = 2.2;
+  if (fresh) { a.heartT = 0; stats.pets++; updateScore(); }
+  const t = clock.elapsedTime;
+  if (t - a.lastSound > 1.6 && canPlay(a.isDog ? 'bark' : 'meow', 0.4)) {
+    a.lastSound = t;
+    a.group.getWorldPosition(tmpV2);
+    (a.isDog ? bark : meow)(volAt(tmpV2), a.voice);
+  }
+  haptic(ctrlIndex, stroking ? 0.25 : 0.6, stroking ? 40 : 90);
+}
+
+// ---------- VR controllers ----------
+const controllers = [], grips = [], xrSources = [null, null];
+const factory = new XRControllerModelFactory();
+function haptic(i, strength, ms) {
+  const h = xrSources[i]?.gamepad?.hapticActuators?.[0];
+  if (h?.pulse) h.pulse(strength, ms);
+}
+const ctrlRay = new THREE.Ray();
+function controllerRay(i) {
+  controllers[i].getWorldPosition(ctrlRay.origin);
+  controllers[i].getWorldQuaternion(tmpQ);
+  ctrlRay.direction.set(0, 0, -1).applyQuaternion(tmpQ);
+  return ctrlRay;
+}
+function handVelocity(i) {
+  const h = hands[i].hist;
+  if (h.length < 2) return new THREE.Vector3();
+  let dtSum = 0;
+  for (let k = 1; k < h.length; k++) dtSum += h[k].dt;
+  return h[h.length - 1].p.clone().sub(h[0].p).divideScalar(Math.max(dtSum, 1e-3));
+}
+
+for (let i = 0; i < 2; i++) {
+  const ctrl = renderer.xr.getController(i);
+  ctrl.addEventListener('connected', e => { xrSources[i] = e.data; });
+  ctrl.addEventListener('disconnected', () => { xrSources[i] = null; });
+  const press = (btn) => () => {
+    const h = hands[i];
+    if (h.ball) return;
+    grips[i].getWorldPosition(tmpV);
+    let b = ballNear(tmpV, 0.28);
+    if (!b) {
+      const a = animalNear(tmpV, 0.6);
+      if (a) { pet(a, i, false); return; }
+      b = ballOnRay(controllerRay(i), 12);   // point at a ball and it flies to your hand
+    }
+    if (b) { grabBall(b, i); h.btn = btn; haptic(i, 0.4, 50); return; }
+    if (btn === 'select') cube.material.color.setHSL(Math.random(), 0.8, 0.55);
+  };
+  const release = (btn) => () => {
+    const h = hands[i];
+    if (h.ball && h.btn === btn) {
+      const v = handVelocity(i).multiplyScalar(1.4);
+      if (v.length() > 16) v.setLength(16);
+      throwBall(h.ball, v);
+      h.ball = null; h.btn = null;
+    }
+  };
+  ctrl.addEventListener('selectstart', press('select'));
+  ctrl.addEventListener('squeezestart', press('squeeze'));
+  ctrl.addEventListener('selectend', release('select'));
+  ctrl.addEventListener('squeezeend', release('squeeze'));
+  const ray = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0x9fb0ff, transparent: true, opacity: 0.5 })
+  );
+  ray.scale.z = 3;
+  ctrl.add(ray);
+  dolly.add(ctrl); controllers.push(ctrl);
+
+  const grip = renderer.xr.getControllerGrip(i);
+  grip.add(factory.createControllerModel(grip));
+  dolly.add(grip); grips.push(grip);
+}
+renderer.xr.addEventListener('sessionstart', () => audio());
+
+const prevHand = [new THREE.Vector3(), new THREE.Vector3()], hasPrev = [false, false];
+function updateHands(dt) {
+  for (let i = 0; i < 2; i++) {
+    if (!xrSources[i]) { hasPrev[i] = false; hands[i].hist.length = 0; continue; }
+    grips[i].getWorldPosition(tmpV);
+    const hist = hands[i].hist;
+    hist.push({ p: tmpV.clone(), dt });
+    if (hist.length > 6) hist.shift();
+    // stroking a pet with an empty hand
+    if (hasPrev[i] && dt > 0 && !hands[i].ball) {
+      const v = tmpV.distanceTo(prevHand[i]) / dt;
+      const a = animalNear(tmpV, 0.35);
+      if (a && v > 0.2) {
+        a.stroke += dt;
+        if (a.stroke > 0.2) { a.stroke = 0; pet(a, i, true); }
+      }
+    }
+    prevHand[i].copy(tmpV); hasPrev[i] = true;
+  }
+}
+
+let snapReady = true;
+function updateXRLocomotion(dt) {
+  const session = renderer.xr.getSession();
+  if (!session) return;
+  for (const src of session.inputSources) {
+    const gp = src.gamepad;
+    if (!gp || gp.axes.length < 4) continue;
+    const ax = gp.axes[2], ay = gp.axes[3];
+    if (src.handedness === 'left') {
+      if (Math.abs(ax) > 0.15 || Math.abs(ay) > 0.15) {
+        camera.getWorldDirection(tmpV); tmpV.y = 0; tmpV.normalize();
+        tmpV2.crossVectors(tmpV, UP).normalize();
+        dolly.position.addScaledVector(tmpV, -ay * 2 * dt);
+        dolly.position.addScaledVector(tmpV2, ax * 2 * dt);
+      }
+    } else if (src.handedness === 'right') {
+      if (Math.abs(ax) > 0.7 && snapReady) {
+        snapReady = false;
+        const angle = -Math.sign(ax) * Math.PI / 6;
+        camera.getWorldPosition(tmpV);
+        dolly.position.sub(tmpV).applyAxisAngle(UP, angle).add(tmpV);
+        dolly.rotation.y += angle;
+      } else if (Math.abs(ax) < 0.3) snapReady = true;
+    }
+  }
+}
+
+// ---------- Desktop controls ----------
+let yaw = 0, pitch = -0.2;
+const keys = new Set();
+addEventListener('keydown', e => keys.add(e.code));
+addEventListener('keyup', e => keys.delete(e.code));
+let dragging = false, dragMoved = false, lastX = 0, lastY = 0;
+renderer.domElement.addEventListener('pointerdown', e => {
+  audio(); dragging = true; dragMoved = false; lastX = e.clientX; lastY = e.clientY;
+});
+addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  if (Math.abs(dx) + Math.abs(dy) > 3) dragMoved = true;
+  yaw -= dx * 0.004; pitch = Math.max(-1.3, Math.min(1.3, pitch - dy * 0.004));
+  lastX = e.clientX; lastY = e.clientY;
+});
+const raycaster = new THREE.Raycaster();
+addEventListener('pointerup', e => {
+  const wasClick = dragging && !dragMoved;
+  dragging = false;
+  if (!wasClick || renderer.xr.isPresenting) return;
+  if (deskBall) {
+    camera.getWorldDirection(tmpV);
+    const b = deskBall; deskBall = null;
+    throwBall(b, tmpV.multiplyScalar(9).add(new THREE.Vector3(0, 2.5, 0)));
+    return;
+  }
+  raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
+  const b = ballOnRay(raycaster.ray, 4);
+  const hit = raycaster.intersectObjects(animals.map(a => a.group), true).find(h => h.object.userData.animal && !h.object.isSprite);
+  const ballDist = b ? ballWorld(b, tmpV).distanceTo(raycaster.ray.origin) : Infinity;
+  if (b && (!hit || ballDist < hit.distance + 0.2)) { grabBall(b, -1); return; }
+  if (hit && hit.distance < 2.6) pet(hit.object.userData.animal, -1, false);
+});
+function updateDesktop(dt) {
+  camera.rotation.set(pitch, yaw, 0);
+  const f = (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) - (keys.has('KeyS') || keys.has('ArrowDown') ? 1 : 0);
+  const r = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
+  if (f || r) {
+    const sp = 2.4 * dt;
+    dolly.position.x += (-Math.sin(yaw) * f + Math.cos(yaw) * r) * sp;
+    dolly.position.z += (-Math.cos(yaw) * f - Math.sin(yaw) * r) * sp;
+  }
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- Main loop ----------
+updateScore();
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  if (renderer.xr.isPresenting) { updateXRLocomotion(dt); updateHands(dt); }
+  else updateDesktop(dt);
+
+  const pr = Math.hypot(dolly.position.x, dolly.position.z);
+  if (pr > 12) { dolly.position.x *= 12 / pr; dolly.position.z *= 12 / pr; }
+  camera.getWorldPosition(playerPos);
+
+  director(dt);
+  updateFights(dt);
+  for (const a of animals) updateAnimal(a, dt, t, playerPos);
+  separateAnimals();
+  updateBalls(dt);
+  updateParticles(dt);
+
+  cube.rotation.x = t * 0.7; cube.rotation.y = t * 1.1;
+  hello.position.y = 2.1 + Math.sin(t * 1.5) * 0.03;
+
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
