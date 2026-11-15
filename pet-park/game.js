@@ -6,6 +6,7 @@ import { XRHandModelFactory } from 'three/addons/webxr/XRHandModelFactory.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const statusEl = document.getElementById('status');
 const rand = (a = 0, b = 1) => a + Math.random() * (b - a);
@@ -19,6 +20,7 @@ const MODEL_CONFIG = {
   dog: {
     url: './models/dog.glb', length: 0.8, yaw: 0,
     mainMat: 'Main', lightMat: 'Main_Light',
+    headBone: 'Head', collar: { from: 'Neck1', to: 'Head', t: 0.45, r: 0.075 },
     walkNative: 1.0, runNative: 3.2,
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
@@ -31,6 +33,7 @@ const MODEL_CONFIG = {
     url: './models/husky.glb', length: 1.0, yaw: 0,
     walkNative: 1.25, runNative: 4.0,
     mainMat: 'Material', lightMat: 'Material.001',
+    headBone: 'Head', collar: { from: 'Neck1', to: 'Head', t: 0.45, r: 0.075 },
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
       walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
@@ -41,6 +44,7 @@ const MODEL_CONFIG = {
   cat: {
     // Quaternius Animal Pack Vol.2 cat: only Idle + Walking clips; jumps/headbutts are procedural
     url: './models/cat.glb', length: 0.5, yaw: 0,
+    headBone: 'Bone003', collar: { from: 'Bone002', to: 'Bone003', t: 0.55, r: 0.05 },
     walkNative: 0.55, runNative: 1.25,
     clips: {
       idle: ['Idle'], idle2: ['Idle'], sniff: ['Idle'],
@@ -534,6 +538,27 @@ function setupMaterials(model, kind, coat, cfg) {
   });
 }
 
+// ---------- Collars ----------
+const COLLAR_COLOURS = [0xe8253a, 0x2f7de1, 0x2fb36a, 0xff8a1f, 0x9b4de0, 0xff5fa8, 0x18b5b0, 0xffd23f];
+let collarIdx = 0;
+const COLLAR_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.45, metalness: 0.1 });
+const collarGeoCache = {};
+function collarGeometry(colour) {
+  if (collarGeoCache[colour]) return collarGeoCache[colour];
+  const band = new THREE.TorusGeometry(1, 0.2, 6, 20);
+  const tag = new THREE.CylinderGeometry(0.3, 0.3, 0.08, 12);
+  tag.rotateX(Math.PI / 2); tag.translate(0, -1.45, 0.15);
+  const ring = new THREE.TorusGeometry(0.16, 0.05, 4, 8); ring.translate(0, -1.17, 0.15);
+  const paint = (g, hex) => {
+    const c = new THREE.Color(hex), n = g.attributes.position.count, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    return g;
+  };
+  const merged = mergeGeometries([paint(band, colour), paint(tag, 0xffcf3f), paint(ring, 0xd0d4da)]);
+  return (collarGeoCache[colour] = merged);
+}
+
 function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   const isDog = kind === 'dog';
   const tpl = TPL[breed];
@@ -544,9 +569,24 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   setupMaterials(model, kind, coat, tpl.cfg);
   group.add(model);
 
-  let head = null;
-  model.traverse(o => { if (!head && o.isBone && /^head$/i.test(o.name)) head = o; });
+  const bone = (n) => { let f = null; model.traverse(o => { if (!f && o.isBone && o.name === n) f = o; }); return f; };
+  let head = bone(tpl.cfg.headBone);
   if (!head) model.traverse(o => { if (!head && o.isBone && /head/i.test(o.name)) head = o; });
+  // collar, fitted to the neck in the bind pose and then parented to the neck bone so it follows the head
+  const cc = tpl.cfg.collar, nb = cc && bone(cc.from), hb = cc && bone(cc.to);
+  if (nb && hb) {
+    group.updateMatrixWorld(true);
+    const pa = nb.getWorldPosition(new THREE.Vector3()), pb = hb.getWorldPosition(new THREE.Vector3());
+    const zAxis = pb.clone().sub(pa).normalize();
+    const xAxis = new THREE.Vector3().crossVectors(UP, zAxis).normalize();
+    const yAxis = new THREE.Vector3().crossVectors(zAxis, xAxis);
+    const collar = new THREE.Mesh(collarGeometry(COLLAR_COLOURS[collarIdx++ % COLLAR_COLOURS.length]), COLLAR_MAT);
+    collar.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
+    collar.position.copy(pa).lerp(pb, cc.t);
+    collar.scale.setScalar(cc.r * tpl.cfg.length / (kind === 'dog' ? 0.8 : 0.5) * (breed === 'husky' ? 0.8 : 1));
+    group.add(collar);
+    (cc.to === tpl.cfg.headBone && cc.t > 0.5 ? hb : nb).attach(collar);
+  }
   const bodyAnchor = new THREE.Object3D();
   bodyAnchor.position.y = tpl.height * 0.55;
   group.add(bodyAnchor);
@@ -1634,6 +1674,9 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+const SHADOW_PETS = 14;
+let shadowT = 0;
+
 // ---------- Main loop ----------
 updateScore();
 window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
@@ -1664,6 +1707,12 @@ renderer.setAnimationLoop(() => {
   updateFeeder(dt, t);
   updateParticles(dt);
   scenery?.update?.(dt, t, playerPos);
+  shadowT -= dt;
+  if (shadowT <= 0) {
+    shadowT = 0.5;
+    const ranked = [...animals].sort((x, y) => x.group.position.distanceToSquared(playerPos) - y.group.position.distanceToSquared(playerPos));
+    ranked.forEach((a, i) => { const on = i < SHADOW_PETS; if (a.shadowOn !== on) { a.shadowOn = on; a.group.traverse(o => { if (o.isSkinnedMesh) o.castShadow = on; }); } });
+  }
 
   renderer.render(scene, camera);
 });
