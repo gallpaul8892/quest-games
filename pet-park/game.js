@@ -221,6 +221,54 @@ let kibbleMesh, spinner, buttonCap;
   kibbleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(kibbleMesh);
 }
+// ---------- Cat climbing frames ----------
+function releasePlatform(a) {
+  const c = a.climb;
+  if (c && c.reserved) { c.reserved.occ = Math.max(0, c.reserved.occ - 1); c.reserved = null; }
+}
+const catTrees = [];
+{
+  const TREE_SPOTS = [{ x: 4.3, z: -3.2, rot: 0.4, carpet: 0x6fb7b0 }, { x: -4.8, z: 3.4, rot: 2.2, carpet: 0xc88fc4 }, { x: 3.2, z: 5.0, rot: 4.1, carpet: 0x8fb0d9 }];
+  const LEVELS = [{ a: 0, d: 0.34, y: 0.45, r: 0.2 }, { a: 2.1, d: 0.32, y: 0.88, r: 0.2 }, { a: 4.2, d: 0.32, y: 1.3, r: 0.2 }, { a: 0, d: 0, y: 1.72, r: 0.3, bed: true }];
+  const sisal = new THREE.MeshStandardMaterial({ color: 0xc9a46a, roughness: 0.95, flatShading: true });
+  const wood = new THREE.MeshStandardMaterial({ color: 0xb98a5a, roughness: 0.8 });
+  for (const spot of TREE_SPOTS) {
+    const carpet = new THREE.MeshStandardMaterial({ color: spot.carpet, roughness: 1 });
+    const parts = { carpet: [], sisal: [], wood: [] };
+    const add = (key, geo, x, y, z) => { geo.translate(x, y, z); parts[key].push(geo); };
+    add('carpet', new THREE.BoxGeometry(0.95, 0.06, 0.95), spot.x, 0.03, spot.z);
+    add('sisal', new THREE.CylinderGeometry(0.075, 0.075, 1.7, 10), spot.x, 0.88, spot.z);
+    const tree = { x: spot.x, z: spot.z, platforms: [] };
+    for (const L of LEVELS) {
+      const ang = L.a + spot.rot;
+      const px = spot.x + Math.cos(ang) * L.d, pz = spot.z + Math.sin(ang) * L.d;
+      add('carpet', new THREE.CylinderGeometry(L.r, L.r, 0.06, 16), px, L.y - 0.03, pz);
+      if (L.d > 0) {
+        add('sisal', new THREE.CylinderGeometry(0.04, 0.04, L.y - 0.06, 8), px + Math.cos(ang) * 0.08, (L.y - 0.06) / 2 + 0.06, pz + Math.sin(ang) * 0.08);
+        const arm = new THREE.BoxGeometry(L.d, 0.04, 0.06); arm.rotateY(-ang);
+        add('wood', arm, spot.x + Math.cos(ang) * L.d / 2, L.y - 0.08, spot.z + Math.sin(ang) * L.d / 2);
+      }
+      if (L.bed) {
+        const rim = new THREE.TorusGeometry(L.r - 0.03, 0.05, 6, 20); rim.rotateX(Math.PI / 2);
+        add('carpet', rim, px, L.y + 0.02, pz);
+        // dangling pom-pom toy
+        add('wood', new THREE.CylinderGeometry(0.004, 0.004, 0.35, 4), px + L.r * 0.9, L.y - 0.2, pz);
+        add('carpet', new THREE.SphereGeometry(0.045, 8, 6), px + L.r * 0.9, L.y - 0.4, pz);
+      }
+      tree.platforms.push({ x: px, z: pz, y: L.y, r: L.r, occ: 0, cap: L.bed ? 2 : 1, bed: !!L.bed, ang });
+    }
+    for (const [key, mat] of [['carpet', carpet], ['sisal', sisal], ['wood', wood]]) {
+      const m = new THREE.Mesh(mergeGeometries(parts[key]), mat);
+      m.castShadow = true; m.receiveShadow = true; scene.add(m);
+    }
+    catTrees.push(tree);
+  }
+}
+function freePlatform(tree, minIdx = 1) {
+  const free = tree.platforms.map((pl, i) => ({ pl, i })).filter(({ pl, i }) => i >= minIdx && pl.occ < pl.cap);
+  return free.length ? pick(free).i : -1;
+}
+
 function freeBowlFor(a) {
   let best = null, bd = Infinity;
   for (const b of bowls) {
@@ -417,6 +465,13 @@ function canvasTex(draw) {
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 }
 const TEX = {
+  zzz: canvasTex(g => {
+    g.font = 'bold 64px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.lineWidth = 8; g.strokeStyle = 'rgba(255,255,255,0.95)'; g.fillStyle = '#5a6cff';
+    g.strokeText('z', 44, 84); g.fillText('z', 44, 84);
+    g.font = 'bold 44px system-ui, sans-serif';
+    g.strokeText('z', 90, 40); g.fillText('z', 90, 40);
+  }),
   heart: canvasTex(g => {
     g.fillStyle = '#ff4d7a'; g.beginPath(); g.moveTo(64, 112);
     g.bezierCurveTo(8, 72, 8, 18, 40, 18); g.bezierCurveTo(54, 18, 64, 30, 64, 40);
@@ -443,6 +498,7 @@ function spawnParticle(type, pos) {
   const u = { type, age: 0 };
   if (type === 'heart') { u.life = 1.3; u.size = rand(0.1, 0.15); u.vel = new THREE.Vector3(rand(-.12, .12), 0.45, rand(-.12, .12)); }
   if (type === 'puff')  { u.life = 0.6; u.size = rand(0.14, 0.24); u.vel = new THREE.Vector3(rand(-.4, .4), rand(.1, .4), rand(-.4, .4)); }
+  if (type === 'zzz')   { u.life = 2.2; u.size = rand(0.1, 0.13); u.vel = new THREE.Vector3(rand(-.05, .05), 0.16, rand(-.05, .05)); }
   if (type === 'star')  { u.life = 0.8; u.size = rand(0.07, 0.1); u.vel = new THREE.Vector3(rand(-.6, .6), rand(.8, 1.3), rand(-.6, .6)); }
   s.scale.setScalar(u.size);
   s.userData = u; scene.add(s); particles.push(s);
@@ -454,6 +510,7 @@ function updateParticles(dt) {
     s.position.addScaledVector(u.vel, dt);
     const k = u.age / u.life;
     if (u.type === 'puff') { s.scale.setScalar(u.size * (1 + k * 1.5)); s.material.opacity = 0.7 * (1 - k); }
+    else if (u.type === 'zzz') { s.scale.setScalar(u.size * (0.7 + k * 0.8)); s.material.opacity = k < 0.2 ? k * 5 : 1 - (k - 0.2) / 0.8; }
     else if (u.type === 'star') { u.vel.y -= 2.5 * dt; s.material.rotation += dt * 6; s.material.opacity = 1 - k * k; }
     else s.material.opacity = 1 - k;
     if (u.age > u.life) { scene.remove(s); s.material.dispose(); particles.splice(i, 1); }
@@ -617,6 +674,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
     mixer, actions, current: null, oneShotUntil: 0, idleKey: 'idle',
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
     size: (isDog ? 1 : 0.72) * variation, len: tpl.cfg.length * variation,
+    cycleLen: rand(70, 120), sleepFrac: isDog ? 0.27 : 0.34, cycleT: 0, lying: false, sinkCur: 0, sinkMax: tpl.height * (isDog ? 0.3 : 0.24), zzzT: 0, climb: null, sleepSpot: null,
     hunger: rand(0.15, 0.5), hungerRate: 1 / rand(100, 170), bowl: null, eatingNow: false, foodCheckT: rand(0, 0.5), hungryIcon: null,
     speed: (isDog ? 1.1 : 0.8) * (0.6 + 0.4 * variation) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * (0.7 + 0.3 * variation) * rand(0.9, 1.1),
     voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation), 0.7, 1.5), seed: rand(0, 100),
@@ -625,6 +683,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
     ball: null, carrying: null, fight: null, followTarget: null, followT: 0, chaseT: 0, excite: 1, bats: 0, pounce: 0, tussleT: 0,
   };
   group.traverse(o => { o.userData.animal = a; });
+  a.cycleT = rand(0, a.cycleLen);
   play(a, 'idle');
   mixer.update(rand(0, 3));   // desync idle loops
   return a;
@@ -803,7 +862,7 @@ function fakeThrow(point) {
   fakeCooldownUntil = clock.elapsedTime + 2;
   let fooled = 0, barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.hunger > HUNGRY) continue;
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.hunger > HUNGRY) continue;
     toWander(d);
     d.mode = 'fooled'; d.fakePhase = 'run'; d.fakeRunT = 0; d.excite = rand(0.92, 1.08);
     const ang = rand(0, Math.PI * 2), rad = rand(0.3, 1.8);
@@ -828,7 +887,7 @@ function throwBall(b, vel) {
 function dogsChase(b) {
   let barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.hunger > HUNGRY) continue;   // too hungry to care
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.hunger > HUNGRY) continue;   // too hungry (or sleepy) to care
     toWander(d);
     d.mode = 'chase'; d.ball = b; d.chaseT = 0; d.excite = rand(0.92, 1.08);
     if (barks < 3 && Math.random() < 0.4) {
@@ -869,6 +928,13 @@ function startFollow(d, leader) {
   d.mode = 'follow'; d.followTarget = leader; d.followT = rand(1.5, 3); d.ball = null;
 }
 function toWander(a) {
+  if (a.mode === 'climb' && a.climb && a.group.position.y > 0.01) {   // can't just wander off a platform
+    a.climb.sleep = false; a.lying = false;
+    if (a.climb.stage === 'perch') a.climb.perchT = 0;
+    return;
+  }
+  if (a.climb) { releasePlatform(a); a.climb = null; }
+  a.lying = false; a.sleepSpot = null;
   if (a.bowl) { if (a.bowl.occupant === a) a.bowl.occupant = null; a.bowl = null; }
   a.eatingNow = false;
   if (a.mode === 'catchase' && a.chaseCat && a.chaseCat.chaser === a) a.chaseCat.chaser = null;
@@ -977,11 +1043,65 @@ function steer(a, x, z, dt, rate) {
   turnTo(a, Math.atan2(dx, dz), dt, rate);
   return Math.hypot(dx, dz);
 }
+function isRowdy(a) { return false; }   // replaced by the litter-tray system
+function platformPoint(pl) {
+  const ang = rand(0, Math.PI * 2), rr = rand(0, pl.r * 0.3);
+  return new THREE.Vector3(pl.x + Math.cos(ang) * rr, pl.y + (pl.bed ? 0.01 : 0), pl.z + Math.sin(ang) * rr);
+}
+function hopTo(a, c, to, t) {
+  c.from = a.group.position.clone(); c.to = to.clone(); c.t0 = t; c.stage = 'hop';
+  c.dur = 0.35 + Math.min(0.3, c.from.distanceTo(c.to) * 0.25);
+  if (Math.random() < 0.25 && canPlay('mrrp', 0.6)) mrrp(volAt(c.from) * 0.5, a.voice);
+}
+function startClimb(a, tree, targetIdx, sleep) {
+  toWander(a);
+  const p0 = tree.platforms[0];
+  const out = new THREE.Vector3(Math.cos(p0.ang), 0, Math.sin(p0.ang));
+  const path = []; for (let i = 0; i <= targetIdx; i++) path.push(i);
+  const reserved = tree.platforms[targetIdx]; reserved.occ++;
+  a.mode = 'climb';
+  a.climb = { tree, path, reserved, sleep, stage: 'approach', i: 0, dir: 1,
+              start: new THREE.Vector3(tree.x + out.x * (0.34 + p0.r + 0.3), 0, tree.z + out.z * (0.34 + p0.r + 0.3)) };
+}
+function startSleep(a, t) {
+  if (!a.isDog && Math.random() < 0.35) {           // cats love a high bed
+    const trees = [...catTrees].sort((x, y) => Math.hypot(x.x - a.group.position.x, x.z - a.group.position.z) - Math.hypot(y.x - a.group.position.x, y.z - a.group.position.z));
+    for (const tr of trees.slice(0, 2)) { const idx = freePlatform(tr, 2); if (idx >= 0) { startClimb(a, tr, idx, true); return; } }
+  }
+  toWander(a);
+  // snuggle up next to another sleeper of the same kind
+  const buddies = (a.isDog ? dogs : cats).filter(o => o !== a && o.mode === 'sleep' && o.lying && o.group.position.distanceTo(a.group.position) < (a.isDog ? 6 : 9));
+  const buddy = buddies.length && (!a.isDog || Math.random() < 0.5) ? pick(buddies) : null;
+  if (buddy) {
+    const ang = rand(0, Math.PI * 2), rr = 0.3 * (a.size + buddy.size);
+    a.sleepSpot = new THREE.Vector3(buddy.group.position.x + Math.cos(ang) * rr, 0, buddy.group.position.z + Math.sin(ang) * rr);
+  } else {
+    a.sleepSpot = new THREE.Vector3(a.group.position.x + rand(-1.5, 1.5), 0, a.group.position.z + rand(-1.5, 1.5));
+    const r = Math.hypot(a.sleepSpot.x, a.sleepSpot.z); if (r > ARENA) a.sleepSpot.multiplyScalar(ARENA / r);
+  }
+  a.mode = 'sleep'; a.lying = false; a.zzzT = rand(0.5, 1.5);
+  // cats nod off in groups: nearby cats close to bedtime join in
+  if (!a.isDog) {
+    const startOfSleep = a.cycleLen * (1 - a.sleepFrac);
+    for (const o of cats) {
+      if (o === a || o.mode !== 'wander') continue;
+      const oStart = o.cycleLen * (1 - o.sleepFrac);
+      if (o.group.position.distanceTo(a.group.position) < 5 && oStart - o.cycleT < 25 && oStart - o.cycleT > 0) o.cycleT = oStart + 0.01;
+    }
+  }
+}
+
 function chooseTarget(a, player) {
   if (a.hunger > HUNGRY && Math.random() < 0.5) {
     const ang = rand(0, Math.PI * 2), rad = rand(1.6, 2.6);
     a.target = new THREE.Vector3(FEEDER.x + Math.cos(ang) * rad, 0, FEEDER.z + Math.sin(ang) * rad);
     return;
+  }
+  if (!a.isDog && a.hunger < HUNGRY && Math.random() < 0.15) {
+    const tree = catTrees.filter(tr => Math.hypot(tr.x - a.group.position.x, tr.z - a.group.position.z) < 10)
+      .sort((x, y) => Math.hypot(x.x - a.group.position.x, x.z - a.group.position.z) - Math.hypot(y.x - a.group.position.x, y.z - a.group.position.z))[0];
+    const idx = tree ? freePlatform(tree) : -1;
+    if (idx >= 0) { startClimb(a, tree, idx, false); return; }
   }
   if (a.hunger < HUNGRY && Math.random() < (a.isDog ? 0.12 : 0.3)) {
     let best = null, bd = 6;
@@ -1007,7 +1127,10 @@ function updateAnimal(a, dt, t, player) {
   const g = a.group, p = g.position;
   const dxp = player.x - p.x, dzp = player.z - p.z, distP = Math.hypot(dxp, dzp);
   a.petTimer = Math.max(0, a.petTimer - dt);
-  if (a.mode !== 'eat' || !a.eatingNow) a.hunger = Math.min(1, a.hunger + a.hungerRate * dt);
+  if (a.mode !== 'eat' || !a.eatingNow) a.hunger = Math.min(1, a.hunger + a.hungerRate * dt * (a.lying ? 0.5 : 1));
+  a.cycleT = (a.cycleT + dt) % a.cycleLen;
+  const sleepy = a.cycleT > a.cycleLen * (1 - a.sleepFrac);
+  if (sleepy && a.mode === 'wander' && a.petTimer <= 0 && a.hunger < HUNGRY && !isRowdy(a)) startSleep(a, t);
   // go and eat when hungry and there's food in a bowl
   a.foodCheckT -= dt;
   if (a.foodCheckT <= 0) {
@@ -1087,6 +1210,68 @@ function updateAnimal(a, dt, t, player) {
         if (a.hunger < 0.04) {                          // full and happy
           toWander(a); a.idleT = rand(1, 2.5); a.petTimer = 1.0; a.heartT = 0;
           stats.meals++; updateScore();
+        }
+      }
+      break;
+    }
+    case 'sleep': {
+      if (!a.lying) {
+        const d = steer(a, a.sleepSpot.x, a.sleepSpot.z, dt, 5);
+        if (d > 0.2) want = a.speed * 0.8 * clamp(d / 0.6, 0.4, 1);
+        else { a.lying = true; g.rotation.y += rand(-1.2, 1.2); }
+      } else {
+        a.zzzT -= dt;
+        if (a.zzzT <= 0) { a.zzzT = rand(1.3, 2.2); a.head.getWorldPosition(tmpV); tmpV.y += 0.1; spawnParticle('zzz', tmpV); }
+        if (!sleepy || a.hunger > HUNGRY || isRowdy(a)) { toWander(a); a.idleT = rand(1, 2.5); a.idleKey = 'idle2'; }
+      }
+      break;
+    }
+    case 'climb': {
+      const c = a.climb;
+      if (!c) { toWander(a); break; }
+      if (c.stage === 'approach') {
+        const d = steer(a, c.start.x, c.start.z, dt, 7);
+        want = a.speed * 1.3 * clamp(d / 0.6, 0.4, 1);
+        if (d < 0.18) { c.i = 0; hopTo(a, c, platformPoint(c.tree.platforms[c.path[0]]), t); c.dir = 1; }
+      } else if (c.stage === 'hop') {
+        direct = true;
+        const k = Math.min(1, (t - c.t0) / c.dur);
+        p.lerpVectors(c.from, c.to, k);
+        p.y += Math.sin(k * Math.PI) * (0.18 + Math.abs(c.to.y - c.from.y) * 0.25);
+        turnTo(a, Math.atan2(c.to.x - c.from.x, c.to.z - c.from.z), dt, 14);
+        hop = 0; a.hopping = k;
+        if (k >= 1) {
+          a.hopping = 0;
+          p.copy(c.to);
+          if (c.dir > 0 && c.i < c.path.length - 1) { c.i++; c.stage = 'pause'; c.pauseT = rand(0.1, 0.3); }
+          else if (c.dir > 0) {
+            c.stage = 'perch'; c.perchT = c.sleep ? Infinity : rand(6, 15);
+            g.rotation.y = rand(0, Math.PI * 2);
+            if (c.sleep) a.lying = true;
+          } else if (c.i >= -1) { c.stage = 'pause'; c.pauseT = rand(0.1, 0.25); }
+          else { releasePlatform(a); a.climb = null; a.mode = 'wander'; toWander(a); a.idleT = rand(0.5, 1.5); }
+        }
+      } else if (c.stage === 'pause') {
+        direct = true;
+        c.pauseT -= dt;
+        if (c.pauseT <= 0) {
+          if (c.dir > 0) hopTo(a, c, platformPoint(c.tree.platforms[c.path[c.i]]), t);
+          else if (c.i >= 0) { hopTo(a, c, platformPoint(c.tree.platforms[c.path[c.i]]), t); c.i--; }
+          else { c.i = -2; hopTo(a, c, c.start, t); }
+        }
+      } else if (c.stage === 'perch') {
+        direct = true;
+        if (a.lying) {
+          a.zzzT -= dt;
+          if (a.zzzT <= 0) { a.zzzT = rand(1.3, 2.2); a.head.getWorldPosition(tmpV); tmpV.y += 0.1; spawnParticle('zzz', tmpV); }
+          if (!sleepy || a.hunger > HUNGRY || isRowdy(a)) { a.lying = false; c.sleep = false; c.perchT = rand(1, 2); }
+        } else c.perchT -= dt;
+        if (!a.lying && (c.perchT <= 0 || a.hunger > HUNGRY)) {
+          // climb back down, one platform at a time
+          c.dir = -1; c.i = c.path.length - 2;
+          if (c.i >= 0) hopTo(a, c, platformPoint(c.tree.platforms[c.path[c.i]]), t);
+          else hopTo(a, c, c.start, t);
+          c.i--;
         }
       }
       break;
@@ -1226,9 +1411,15 @@ function updateAnimal(a, dt, t, player) {
   } else a.curSpeed = 0;
   const r = Math.hypot(p.x, p.z);
   if (r > ARENA + 1) { p.x *= (ARENA + 1) / r; p.z *= (ARENA + 1) / r; }
+  if (!direct && a.mode !== 'climb') p.y = 0;
 
   // ----- animation -----
-  if (t >= a.oneShotUntil) {
+  const lyingNow = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch'));
+  if (lyingNow) {
+    play(a, a.isDog ? 'sniff' : 'idle', { timeScale: 0.18 });   // slow sleepy breathing
+  } else if (a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) {
+    play(a, 'idle');
+  } else if (t >= a.oneShotUntil) {
     if (tussle) {
       a.tussleT -= dt;
       if (a.tussleT <= 0) { a.tussleT = rand(0.25, 0.6); playOnce(a, pick(['jump', 'hitL', 'hitR', 'happy']), t, rand(1.1, 1.5)); }
@@ -1253,7 +1444,11 @@ function updateAnimal(a, dt, t, player) {
     const tilt = (a.mode === 'eat' && a.eatingNow && !a.actions.eat) ? 0.32 + Math.sin(t * 7 + a.seed) * 0.04 : 0;
     a.model.rotation.x += (tilt - a.model.rotation.x) * (1 - Math.exp(-8 * dt));
   }
-  a.model.position.y = a.modelBaseY + hop / g.scale.x;
+  const onPlatform = p.y > 0.05;
+  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : 0;
+  a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
+  if (a.mode === 'climb' && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
+  a.model.position.y = a.modelBaseY + hop / g.scale.x - a.sinkCur;
   a.label.visible = label && a.petTimer <= 0;
   const showHungry = a.hunger > HUNGRY && a.mode !== 'eat' && !a.label.visible;
   a.hungryIconSprite.visible = showHungry;
@@ -1261,14 +1456,24 @@ function updateAnimal(a, dt, t, player) {
 }
 
 function separateAnimals() {
+  // keep pets on the ground out of the cat trees' posts
+  for (const A of animals) {
+    if (A.group.position.y > 0.05 || A.mode === 'climb') continue;
+    for (const tr of catTrees) {
+      const dx = A.group.position.x - tr.x, dz = A.group.position.z - tr.z, d = Math.hypot(dx, dz);
+      if (d < 0.6 && d > 0.001) { A.group.position.x = tr.x + dx / d * 0.6; A.group.position.z = tr.z + dz / d * 0.6; }
+    }
+  }
   for (let i = 0; i < animals.length; i++) {
     const A = animals[i];
     for (let j = i + 1; j < animals.length; j++) {
       const B = animals[j];
       if (A.fight && A.fight === B.fight) continue;
+      if (A.group.position.y > 0.05 || B.group.position.y > 0.05) continue;
+      const snug = (A.mode === 'sleep' && B.mode === 'sleep') ? 0.55 : 1;
       const p = A.group.position, q = B.group.position;
       const dx = q.x - p.x, dz = q.z - p.z, d = Math.hypot(dx, dz);
-      const min = 0.32 * (A.size + B.size);
+      const min = 0.32 * (A.size + B.size) * snug;
       if (d > 0.0001 && d < min) {
         const push = (min - d) / 2, nx = dx / d, nz = dz / d;
         const wa = A.fight?.phase === 'tussle' ? 0 : 1, wb = B.fight?.phase === 'tussle' ? 0 : 1;
