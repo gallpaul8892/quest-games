@@ -1085,10 +1085,72 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
     ball: null, carrying: null, fight: null, followTarget: null, followT: 0, chaseT: 0, excite: 1, bats: 0, pounce: 0, tussleT: 0,
   };
   group.traverse(o => { o.userData.animal = a; });
+  a.lieK = 0; a.stretchK = 0; a.stretchT = 0; a.lieStyle = 'sphinx'; a.curlDir = 1; a.settleT = 0; a.poseDirty = false;
+  a.lieSink = tpl.height * LIE_POSES[isDog ? 'dog' : 'cat'].sink;
+  buildLieRig(a);
   a.cycleT = rand(0, a.cycleLen);
   play(a, 'idle');
   mixer.update(rand(0, 3));   // desync idle loops
   return a;
+}
+
+// ---------- Lying down: procedural bone offsets layered on top of the idle clip ----------
+const LIE_RIGS = {
+  dog: { spine: ['Torso2', 'Torso3'], neck: ['Neck1', 'Neck2'], head: ['Head'], frontUpper: ['FrontUpperLegL', 'FrontUpperLegR'], frontLower: ['FrontLowerLegL', 'FrontLowerLegR'],
+         backA: ['BackLegL', 'BackLegR'], backB: ['BackUpperLegL', 'BackUpperLegR'], backC: ['BackLowerLegL', 'BackLowerLegR'], tail: ['Tail1', 'Tail2', 'Tail3'] },
+  cat: { spine: ['Bone001'], neck: ['Bone002'], head: ['Bone003'], frontUpper: ['Bone014', 'Bone017'], frontLower: ['Bone015', 'Bone018'], frontFoot: ['Bone016', 'Bone019'],
+         backA: ['Bone008', 'Bone011'], backB: ['Bone009', 'Bone012'], backC: ['Bone010', 'Bone013'], tail: ['Bone004', 'Bone005', 'Bone006', 'Bone007'] },
+};
+const LIE_ROLES = ['spine', 'neck', 'head', 'frontUpper', 'frontLower', 'frontFoot', 'backA', 'backB', 'backC', 'tail'];
+// rotations in the animal's own frame (x: nod forward/down, y: turn sideways), y mirrored by curl direction
+window.LIE_POSES = {
+  dog: {
+    sphinx: { frontUpper: [-1.45, 0, 0], frontLower: [0.15, 0, 0], backA: [-0.35, 0, 0], backB: [1.3, 0, 0], backC: [0.35, 0, 0], neck: [0.3, 0, 0], head: [0.15, 0, 0], tail: [0, 0.4, 0] },
+    curl:   { frontUpper: [-1.45, 0, 0], frontLower: [0.15, 0, 0], backA: [-0.35, 0, 0], backB: [1.3, 0, 0], backC: [0.35, 0, 0], spine: [0, 0.3, 0], neck: [0.35, 0.6, 0], head: [0.3, 0.5, 0], tail: [0, -0.9, 0] },
+    stretch: { frontUpper: [-1.0, 0, 0], neck: [-0.3, 0, 0], head: [-0.2, 0, 0], tail: [0.4, 0, 0] },
+    sink: 0.45,
+  },
+  cat: {
+    sphinx: { frontUpper: [-1.45, 0, 0], frontLower: [0.15, 0, 0], backA: [-0.35, 0, 0], backB: [1.3, 0, 0], backC: [0.35, 0, 0], neck: [0.3, 0, 0], head: [0.15, 0, 0], tail: [-0.55, 0.35, 0] },
+    curl:   { frontUpper: [-1.45, 0, 0], frontLower: [0.15, 0, 0], backA: [-0.35, 0, 0], backB: [1.3, 0, 0], backC: [0.35, 0, 0], spine: [0, 0.45, 0], neck: [0.4, 0.6, 0], head: [0.3, 0.5, 0], tail: [-0.5, -0.55, 0] },
+    stretch: { frontUpper: [-1.0, 0, 0], neck: [-0.3, 0, 0], head: [-0.2, 0, 0], tail: [0.3, 0, 0] },
+    sink: 0.33,
+  },
+};
+function buildLieRig(a) {
+  const spec = LIE_RIGS[a.isDog ? 'dog' : 'cat'], rig = {}, all = [];
+  for (const [role, names] of Object.entries(spec)) {
+    rig[role] = names.map(n => a.model.getObjectByName(n)).filter(Boolean);
+    for (const b of rig[role]) all.push({ b, rest: b.quaternion.clone() });
+  }
+  a.rig = rig; a.rigBones = all;
+}
+function restoreLieBones(a) {
+  if (!a.poseDirty) return;
+  for (const r of a.rigBones) r.b.quaternion.copy(r.rest);   // bones the clip doesn't animate would otherwise keep accumulating
+  a.poseDirty = false;
+}
+const _lgq = new THREE.Quaternion(), _lgqi = new THREE.Quaternion(), _lq = new THREE.Quaternion(), _lpq = new THREE.Quaternion(), _lpqi = new THREE.Quaternion(), _le = new THREE.Euler();
+function applyLiePose(a, t) {
+  const k = a.lieK, s = a.stretchK;
+  if ((k < 0.002 && s < 0.002) || !a.rig) return;
+  const P = LIE_POSES[a.isDog ? 'dog' : 'cat'], pose = P[a.lieStyle] || P.sphinx, ST = P.stretch;
+  const e = k * k * (3 - 2 * k), dir = a.curlDir;
+  a.group.getWorldQuaternion(_lgq); _lgqi.copy(_lgq).invert();
+  for (const role of LIE_ROLES) {
+    const bones = a.rig[role]; if (!bones || !bones.length) continue;
+    const pr = pose[role], sr = ST[role];
+    let x = (pr ? pr[0] : 0) * e, y = (pr ? pr[1] : 0) * e * dir, z = (pr ? pr[2] : 0) * e * dir;
+    if (role === 'spine') x += Math.sin(t * 2.2 + a.seed) * 0.035 * e;          // slow breathing
+    if (sr && s) { x += sr[0] * s; y += sr[1] * s; z += sr[2] * s; }
+    if (!x && !y && !z) continue;
+    _le.set(x, y, z, 'YXZ'); _lq.setFromEuler(_le).premultiply(_lgq).multiply(_lgqi);   // as a world-space rotation
+    for (const b of bones) {
+      b.parent.getWorldQuaternion(_lpq); _lpqi.copy(_lpq).invert();
+      b.quaternion.premultiply(_lpqi.multiply(_lq).multiply(_lpq));
+    }
+  }
+  a.poseDirty = true;
 }
 
 function play(a, role, { once = false, fade = 0.25, timeScale = 1 } = {}) {
@@ -1543,7 +1605,7 @@ function startSleep(a, t) {
     a.sleepSpot = new THREE.Vector3(a.group.position.x + rand(-1.5, 1.5), 0, a.group.position.z + rand(-1.5, 1.5));
     const r = Math.hypot(a.sleepSpot.x, a.sleepSpot.z); if (r > ARENA) a.sleepSpot.multiplyScalar(ARENA / r);
   }
-  a.mode = 'sleep'; a.lying = false; a.zzzT = rand(0.5, 1.5);
+  a.mode = 'sleep'; a.lying = false; a.zzzT = rand(0.5, 1.5); a.settleT = 0;
   // cats nod off in groups: nearby cats close to bedtime join in
   if (!a.isDog) {
     const startOfSleep = a.cycleLen * (1 - a.sleepFrac);
@@ -1854,8 +1916,12 @@ function updateAnimal(a, dt, t, player) {
       if (!a.lying && (!sleepy || a.hunger > HUNGRY || isRowdy(a))) { toWander(a); break; }
       if (!a.lying) {
         const d = steer(a, a.sleepSpot.x, a.sleepSpot.z, dt, 5);
-        if (d > 0.2) want = a.speed * 0.8 * clamp(d / 0.6, 0.4, 1);
-        else { a.lying = true; g.rotation.y += rand(-1.2, 1.2); }
+        if (a.settleT > 0) {
+          // turn round on the spot a couple of times before flopping down
+          a.settleT -= dt; g.rotation.y += dt * (a.isDog ? 4.5 : 3) * a.curlDir; want = a.speed * 0.22;
+          if (a.settleT <= 0) a.lying = true;
+        } else if (d > 0.2) want = a.speed * 0.8 * clamp(d / 0.6, 0.4, 1);
+        else { a.curlDir = Math.random() < 0.5 ? 1 : -1; a.settleT = a.isDog ? rand(1.0, 1.8) : rand(0.4, 0.9); }
       } else {
         a.zzzT -= dt;
         if (a.zzzT <= 0) { a.zzzT = rand(1.3, 2.2); a.head.getWorldPosition(tmpV); tmpV.y += 0.1; spawnParticle('zzz', tmpV); }
@@ -2042,6 +2108,20 @@ function updateAnimal(a, dt, t, player) {
     }
   }
 
+  // ----- lying down / getting up -----
+  const lyingPose = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch') || (a.mode === 'perchJump' && a.pj?.stage === 'perch'));
+  if (a.mode === 'held' || a.mode === 'falling') { a.lieK = 0; a.stretchT = 0; }
+  else if (lyingPose) {
+    if (a.lieK === 0) { a.lieStyle = Math.random() < (a.isDog ? 0.55 : 0.3) ? 'sphinx' : 'curl'; if (a.mode !== 'sleep') a.curlDir = Math.random() < 0.5 ? 1 : -1; }
+    a.lieK = Math.min(1, a.lieK + dt / 1.1);
+  } else if (a.lieK > 0) {
+    a.lieK = Math.max(0, a.lieK - dt / 0.7);
+    want = 0; a.curSpeed = 0;
+    if (a.lieK === 0 && Math.random() < 0.7) a.stretchT = 1.5;      // a big stretch after getting up
+  }
+  if (a.stretchT > 0) { a.stretchT -= dt; want = 0; a.curSpeed = 0; a.stretchK = Math.sin(clamp(1 - a.stretchT / 1.5, 0, 1) * Math.PI); }
+  else a.stretchK = 0;
+
   if (!direct) {
     a.curSpeed += (want - a.curSpeed) * (1 - Math.exp(-6 * dt));
     p.x += Math.sin(g.rotation.y) * a.curSpeed * dt;
@@ -2056,7 +2136,7 @@ function updateAnimal(a, dt, t, player) {
   if (a.mode === 'held' || a.mode === 'falling') {
     play(a, a.isDog ? 'idle2' : 'idle', { timeScale: a.mode === 'held' && !a.isDog && a.heldT > CAT_HOLD_OK ? 2.5 : 1 });
   } else if (lyingNow) {
-    play(a, a.isDog ? 'sniff' : 'idle', { timeScale: 0.18 });   // slow sleepy breathing
+    play(a, 'idle', { timeScale: 0.15 });   // nearly still; the pose and breathing come from applyLiePose
   } else if ((a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) || (a.mode === 'perchJump' && a.pj && a.pj.stage !== 'approach' && a.pj.stage !== 'crouch')) {
     play(a, 'idle');
   } else if (t >= a.oneShotUntil) {
@@ -2086,7 +2166,7 @@ function updateAnimal(a, dt, t, player) {
   }
   const onPlatform = p.y > 0.05;
   const crouch = (a.mode === 'stalk' && (a.stalkPhase === 'creep' || a.stalkPhase === 'wiggle')) || (a.mode === 'perchJump' && a.pj?.stage === 'crouch');
-  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : crouch ? a.sinkMax * 0.4 : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
+  const sinkTarget = crouch ? a.sinkMax * 0.4 : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
   a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
   if ((a.mode === 'climb' || a.mode === 'perchJump') && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
   let zOff = 0, roll = 0;
@@ -2102,7 +2182,9 @@ function updateAnimal(a, dt, t, player) {
   }
   a.model.rotation.z += (roll - a.model.rotation.z) * (1 - Math.exp(-15 * dt));
   a.model.position.z = a.modelBaseZ + zOff / g.scale.x;
-  a.model.position.y = a.modelBaseY + hop / g.scale.x - a.sinkCur;
+  if (a.stretchK > 0) a.model.rotation.x = 0.22 * a.stretchK;            // play-bow stretch, bottom in the air
+  const lk = a.lieK * a.lieK * (3 - 2 * a.lieK);
+  a.model.position.y = a.modelBaseY + hop / g.scale.x - a.sinkCur - lk * a.lieSink;
   a.label.visible = label && a.petTimer <= 0 && a.mode !== 'held';
   const rowdy = isRowdy(a) && a.mode !== 'litter';
   const showHungry = (a.hunger > HUNGRY || rowdy) && a.mode !== 'eat' && !a.label.visible;
@@ -2658,7 +2740,9 @@ renderer.setAnimationLoop(() => {
   updateFights(dt);
   for (const a of animals) {
     updateAnimal(a, dt, t, playerPos);
+    restoreLieBones(a);
     a.mixer.update(dt);
+    applyLiePose(a, t);
   }
   separateAnimals();
   updateBalls(dt);
