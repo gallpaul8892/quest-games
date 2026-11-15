@@ -221,6 +221,157 @@ let kibbleMesh, spinner, buttonCap;
   kibbleMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   scene.add(kibbleMesh);
 }
+// ---------- Birds ----------
+const birds = [];
+{
+  const SPECIES = [
+    { name: 'robin', body: 0x8a6a4a, belly: 0xe8743b, wing: 0x7a5c40, beak: 0x2a2a2a },
+    { name: 'blue tit', body: 0x6a9a4a, belly: 0xf2d24a, wing: 0x3f7fd0, beak: 0x2a2a2a },
+    { name: 'blackbird', body: 0x26262a, belly: 0x2e2e33, wing: 0x1f1f22, beak: 0xf2a23a },
+    { name: 'sparrow', body: 0x9a7a55, belly: 0xd8cbb0, wing: 0x7a5a3a, beak: 0x4a3a2a },
+  ];
+  const BIRD_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, flatShading: true });
+  const paint = (g, hex) => {
+    const c = new THREE.Color(hex), n = g.attributes.position.count, arr = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+    g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+    g.deleteAttribute('uv');
+    return g.index ? g.toNonIndexed() : g;
+  };
+  const bodyGeos = SPECIES.map(sp => {
+    const body = new THREE.SphereGeometry(0.055, 8, 6); body.scale(0.85, 0.8, 1.35);
+    const belly = new THREE.SphereGeometry(0.048, 8, 6); belly.scale(0.8, 0.75, 1.1); belly.translate(0, -0.012, 0.012);
+    const head = new THREE.SphereGeometry(0.036, 8, 6); head.translate(0, 0.03, 0.065);
+    const beak = new THREE.ConeGeometry(0.011, 0.03, 5); beak.rotateX(Math.PI / 2); beak.translate(0, 0.028, 0.108);
+    const tail = new THREE.BoxGeometry(0.045, 0.008, 0.07); tail.rotateX(-0.25); tail.translate(0, 0.008, -0.095);
+    const eyeL = new THREE.SphereGeometry(0.007, 4, 3); eyeL.translate(0.026, 0.04, 0.082);
+    const eyeR = new THREE.SphereGeometry(0.007, 4, 3); eyeR.translate(-0.026, 0.04, 0.082);
+    return mergeGeometries([paint(body, sp.body), paint(belly, sp.belly), paint(head, sp.body), paint(beak, sp.beak), paint(tail, sp.wing), paint(eyeL, 0x111111), paint(eyeR, 0x111111)]);
+  });
+  const wingGeos = SPECIES.map(sp => {
+    const w = new THREE.BufferGeometry();
+    // a flat, slightly swept triangle-ish wing pointing out along +x from the shoulder
+    w.setAttribute('position', new THREE.Float32BufferAttribute([0, 0, 0.035, 0.13, 0, -0.01, 0, 0, -0.04,  0, 0, 0.035, 0, 0, -0.04, 0.13, 0, -0.01], 3));
+    w.computeVertexNormals();
+    return paint(w, sp.wing);
+  });
+  wingGeos.forEach(g => g.computeVertexNormals());
+  const WING_MAT = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, side: THREE.DoubleSide });
+  for (let i = 0; i < 9; i++) {
+    const si = i % SPECIES.length;
+    const root = new THREE.Group();
+    const body = new THREE.Mesh(bodyGeos[si], BIRD_MAT);
+    const wl = new THREE.Mesh(wingGeos[si], WING_MAT), wr = new THREE.Mesh(wingGeos[si], WING_MAT);
+    wl.position.set(0.03, 0.015, 0.005); wr.position.set(-0.03, 0.015, 0.005); wr.scale.x = -1;
+    root.add(body, wl, wr);
+    root.scale.setScalar(1.35);
+    const ang = rand(0, Math.PI * 2);
+    root.position.set(Math.cos(ang) * 6, rand(4, 7), Math.sin(ang) * 6);
+    scene.add(root);
+    birds.push({
+      root, body, wl, wr, state: 'fly', vel: new THREE.Vector3(rand(-1, 1), 0, rand(-1, 1)),
+      orbit: { cx: rand(-4, 4), cz: rand(-4, 4), r: rand(3, 7), h: rand(3.5, 7), th: ang, w: (Math.random() < 0.5 ? 1 : -1) * rand(0.35, 0.6) },
+      flyT: rand(8, 25), groundT: 0, hopT: 0, landAt: null, flap: rand(0, 6), stalker: null, seed: rand(0, 100), fleeDelay: -1,
+    });
+  }
+}
+function chirp(pos, pitch = 1) {
+  if (!audioOK()) return;
+  const c = actx, t0 = c.currentTime, v = Math.min(0.5, volAt(pos));
+  for (let k = 0; k < 3; k++) {
+    const t = t0 + k * 0.09;
+    const o = c.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(3200 * pitch, t); o.frequency.exponentialRampToValueAtTime(4800 * pitch, t + 0.05);
+    const g = c.createGain(); env(g, t, 0.12 * v, 0.005, 0.02, 0.04);
+    o.connect(g).connect(c.destination); o.start(t); o.stop(t + 0.08);
+  }
+}
+function birdTakeOff(b, awayFrom) {
+  if (b.state === 'takeoff' || b.state === 'fly') return;
+  b.state = 'takeoff'; b.fleeDelay = -1;
+  const away = new THREE.Vector3(b.root.position.x - (awayFrom ? awayFrom.x : b.root.position.x + rand(-1, 1)), 0, b.root.position.z - (awayFrom ? awayFrom.z : b.root.position.z + rand(-1, 1))).normalize();
+  b.flee = new THREE.Vector3(b.root.position.x + away.x * 5, rand(4, 6.5), b.root.position.z + away.z * 5);
+  b.vel.set(away.x * 2, 3.2, away.z * 2);
+  b.flyT = rand(10, 25);
+  chirp(b.root.position, rand(0.9, 1.15));
+}
+const birdTmp = new THREE.Vector3();
+function updateBirds(dt, t) {
+  for (const b of birds) {
+    const p = b.root.position;
+    let target = null, speed = 3.5, flapping = true;
+    if (b.state === 'fly') {
+      const o = b.orbit;
+      o.th += o.w * dt;
+      target = birdTmp.set(o.cx + Math.cos(o.th) * o.r, o.h + Math.sin(t * 0.7 + b.seed) * 0.4, o.cz + Math.sin(o.th) * o.r);
+      b.flyT -= dt;
+      if (b.flyT <= 0) {
+        // pick somewhere on the grass to land, away from the player
+        let spot = null;
+        for (let k = 0; k < 8 && !spot; k++) {
+          const ang = rand(0, Math.PI * 2), rr = Math.sqrt(Math.random()) * 8;
+          const c = new THREE.Vector3(Math.cos(ang) * rr, 0, Math.sin(ang) * rr);
+          if (c.distanceTo(playerPos.clone().setY(0)) > 2.2 && !animals.some(a => a.group.position.distanceTo(c) < 1.5)) spot = c.setY(0.05);
+        }
+        if (spot) { b.state = 'descend'; b.landAt = spot; } else b.flyT = rand(3, 6);
+      }
+      if (Math.random() < dt * 0.02) Object.assign(o, { cx: rand(-4, 4), cz: rand(-4, 4), r: rand(3, 7), h: rand(3.5, 7) });
+    } else if (b.state === 'descend') {
+      target = birdTmp.copy(b.landAt);
+      const d = p.distanceTo(b.landAt);
+      speed = clamp(d * 1.2, 0.8, 3.5);
+      flapping = d < 1.2;
+      if (d < 0.08) { b.state = 'ground'; p.copy(b.landAt); b.groundT = rand(7, 16); b.vel.set(0, 0, 0); b.hopT = rand(0.4, 1); }
+    } else if (b.state === 'takeoff') {
+      target = birdTmp.copy(b.flee); speed = 4.5;
+      if (p.distanceTo(b.flee) < 0.6 || p.y > 3.5) { b.state = 'fly'; b.orbit.cx = rand(-4, 4); b.orbit.cz = rand(-4, 4); b.orbit.th = Math.atan2(p.z - b.orbit.cz, p.x - b.orbit.cx); }
+    }
+
+    if (b.state === 'ground') {
+      // hop about pecking at the grass
+      b.groundT -= dt; b.hopT -= dt;
+      p.y = Math.max(0.05, p.y - dt);
+      if (b.hopT <= 0) {
+        b.hopT = rand(0.5, 1.4);
+        const ang = rand(0, Math.PI * 2);
+        b.hopTo = new THREE.Vector3(p.x + Math.cos(ang) * 0.18, 0, p.z + Math.sin(ang) * 0.18); b.hopStart = t;
+        b.root.rotation.y = Math.atan2(Math.cos(ang) * 0.18, Math.sin(ang) * 0.18) * 0 + Math.atan2(b.hopTo.x - p.x, b.hopTo.z - p.z);
+      }
+      if (b.hopTo && t - b.hopStart < 0.18) {
+        const k = (t - b.hopStart) / 0.18;
+        p.x += (b.hopTo.x - p.x) * 0.3; p.z += (b.hopTo.z - p.z) * 0.3;
+        p.y = 0.05 + Math.sin(k * Math.PI) * 0.05;
+      }
+      b.body.rotation.x = Math.max(0, Math.sin(t * 9 + b.seed)) * 0.5 * (Math.sin(t * 1.3 + b.seed) > 0 ? 1 : 0);   // peck
+      b.wl.rotation.z = -1.35; b.wr.rotation.z = 1.35;   // wings folded
+      // anything that gets too close scares it off; a pouncing cat makes it leave in the nick of time
+      let threat = null;
+      if (playerPos.distanceTo(birdTmp.set(p.x, playerPos.y, p.z)) < 1.6) threat = playerPos;
+      for (const a of animals) {
+        const d = Math.hypot(a.group.position.x - p.x, a.group.position.z - p.z);
+        if ((a.isDog && d < 2.2 && a.curSpeed > 0.5) || d < 0.75) { threat = a.group.position; break; }
+      }
+      if (b.fleeDelay >= 0) { b.fleeDelay -= dt; if (b.fleeDelay < 0) threat = b.stalker ? b.stalker.group.position : null, birdTakeOff(b, threat || p); }
+      if (threat) birdTakeOff(b, threat);
+      else if (b.groundT <= 0) birdTakeOff(b, null);
+      continue;
+    }
+
+    // flying: steer smoothly toward the target
+    const desired = birdTmp.sub(p);
+    const dist = desired.length();
+    if (dist > 0.001) desired.multiplyScalar(Math.min(speed, dist * 3) / dist);
+    b.vel.lerp(desired, 1 - Math.exp(-2.2 * dt));
+    p.addScaledVector(b.vel, dt);
+    if (b.vel.lengthSq() > 0.01) b.root.rotation.y = Math.atan2(b.vel.x, b.vel.z);
+    b.body.rotation.x = clamp(-b.vel.y * 0.15, -0.5, 0.5);
+    b.flap += dt * (flapping ? 22 : 0);
+    const glide = !flapping || Math.sin(t * 0.9 + b.seed) > 0.6;
+    const wingA = glide ? 0.15 : Math.sin(b.flap) * 0.9;
+    b.wl.rotation.z = wingA; b.wr.rotation.z = -wingA;   // right wing is mirrored
+  }
+}
+
 // ---------- Cat climbing frames ----------
 function releasePlatform(a) {
   const c = a.climb;
@@ -1094,6 +1245,7 @@ function toWander(a) {
   }
   if (a.climb) { releasePlatform(a); a.climb = null; }
   a.lying = false; a.sleepSpot = null;
+  if (a.stalkBird) { if (a.stalkBird.stalker === a) a.stalkBird.stalker = null; a.stalkBird = null; }
   if (a.tray) { if (a.tray.occupant === a) a.tray.occupant = null; a.tray = null; }
   a.inTray = false;
   if (a.bowl) { if (a.bowl.occupant === a) a.bowl.occupant = null; a.bowl = null; }
@@ -1379,6 +1531,42 @@ function updateAnimal(a, dt, t, player) {
           toWander(a); a.idleT = rand(1, 2.5); a.petTimer = 1.0; a.heartT = 0;
           stats.meals++; updateScore();
         }
+      }
+      break;
+    }
+    case 'stalk': {
+      const bd = a.stalkBird;
+      if (!bd) { toWander(a); break; }
+      const bp = bd.root.position;
+      const dB = Math.hypot(bp.x - p.x, bp.z - p.z);
+      if (a.stalkPhase === 'creep') {
+        if (bd.state !== 'ground') { a.stalkPhase = 'lookup'; a.stalkT = rand(1.2, 2); if (Math.random() < 0.5) playOnce(a, 'jump', t); break; }
+        steer(a, bp.x, bp.z, dt, 5);
+        want = a.speed * 0.4;                                   // low, slow creep
+        if (dB < 1.3) { a.stalkPhase = 'wiggle'; a.stalkT = rand(0.5, 0.9); }
+      } else if (a.stalkPhase === 'wiggle') {
+        turnTo(a, Math.atan2(bp.x - p.x, bp.z - p.z), dt, 10);
+        a.stalkT -= dt;
+        if (bd.state !== 'ground') { a.stalkPhase = 'lookup'; a.stalkT = 1.5; break; }
+        if (a.stalkT <= 0) {
+          a.stalkPhase = 'pounce';
+          a.pFrom = p.clone(); a.pTo = new THREE.Vector3(bp.x, 0, bp.z); a.pT0 = t;
+          bd.fleeDelay = 0.12;                                   // the bird always notices just in time
+          if (canPlay('mrrp', 0.3)) mrrp(volAt(p), a.voice * 1.1);
+        }
+      } else if (a.stalkPhase === 'pounce') {
+        direct = true;
+        const k = Math.min(1, (t - a.pT0) / 0.45);
+        p.lerpVectors(a.pFrom, a.pTo, k);
+        p.y = Math.sin(k * Math.PI) * 0.32;
+        a.pounceK = k;
+        if (k >= 1) { p.y = 0; a.pounceK = 0; a.stalkPhase = 'lookup'; a.stalkT = rand(1.2, 2.2); }
+      } else if (a.stalkPhase === 'lookup') {
+        // missed! watch it fly away, maybe give chase for a moment
+        a.stalkT -= dt;
+        turnTo(a, Math.atan2(bp.x - p.x, bp.z - p.z), dt, 6);
+        if (bd.state !== 'ground' && bp.y < 2.5 && dB < 4) want = a.fast * 0.8;
+        if (a.stalkT <= 0) { toWander(a); a.idleT = rand(0.5, 1.5); }
       }
       break;
     }
@@ -1687,16 +1875,22 @@ function updateAnimal(a, dt, t, player) {
     const k = (t - a.hopT0) / a.hopDur;
     hop += Math.sin(k * Math.PI) * a.hopH;
     a.model.rotation.x = a.nuzzle ? Math.sin(k * Math.PI) * 0.25 : -Math.sin(k * Math.PI * 2) * 0.18;
-  } else {
+  } else if (a.mode !== 'stalk') {
     // cats have no eating clip: tip the head down into the bowl
     const tilt = (a.mode === 'eat' && a.eatingNow && !a.actions.eat) ? 0.32 + Math.sin(t * 7 + a.seed) * 0.04 : 0;
     a.model.rotation.x += (tilt - a.model.rotation.x) * (1 - Math.exp(-8 * dt));
   }
   const onPlatform = p.y > 0.05;
-  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
+  const crouch = a.mode === 'stalk' && (a.stalkPhase === 'creep' || a.stalkPhase === 'wiggle');
+  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : crouch ? a.sinkMax * 0.4 : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
   a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
   if (a.mode === 'climb' && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
   let zOff = 0, roll = 0;
+  if (a.mode === 'stalk') {
+    if (a.stalkPhase === 'wiggle') roll = Math.sin(t * 24) * 0.12;
+    if (a.stalkPhase === 'pounce') a.model.rotation.x = -0.5 * Math.sin((a.pounceK || 0) * Math.PI);
+    else if (a.stalkPhase === 'lookup') a.model.rotation.x += (-0.25 - a.model.rotation.x) * (1 - Math.exp(-6 * dt));
+  }
   if (a.mode === 'held') {
     a.model.rotation.x = -0.45;                                          // held up, head toward you
     if (a.isDog && a.lickAnim > 0) zOff = Math.sin((1 - a.lickAnim / 0.35) * Math.PI) * 0.14;   // lunge in for a lick
@@ -1742,7 +1936,7 @@ function separateAnimals() {
   }
 }
 
-let catFightTimer = 3, catChaseTimer = rand(5, 9), dogSquabbleTimer = 4;
+let catFightTimer = 3, catChaseTimer = rand(5, 9), dogSquabbleTimer = 4, birdWatchT = 2;
 function giveUpCatChase(dog) {
   const c = dog.chaseCat;
   toWander(dog); dog.chaseCat = null;
@@ -1771,6 +1965,23 @@ function startCatChase() {
   }
 }
 function director(dt) {
+  birdWatchT -= dt;
+  if (birdWatchT <= 0) {
+    birdWatchT = rand(1.5, 3);
+    for (const bd of birds) {
+      if (bd.state !== 'ground' || bd.stalker) continue;
+      let best = null, bdist = 7;
+      for (const c of cats) {
+        if (c.mode !== 'wander' || c.petTimer > 0 || c.hunger > HUNGRY || isRowdy(c)) continue;
+        const d = Math.hypot(c.group.position.x - bd.root.position.x, c.group.position.z - bd.root.position.z);
+        if (d < bdist && d > 1.4) { bdist = d; best = c; }
+      }
+      if (best && Math.random() < 0.75) {
+        toWander(best);
+        best.mode = 'stalk'; best.stalkBird = bd; best.stalkPhase = 'creep'; bd.stalker = best;
+      }
+    }
+  }
   catChaseTimer -= dt;
   if (catChaseTimer <= 0) { catChaseTimer = rand(6, 12); startCatChase(); }
   // hungry dogs get grumpy-playful with each other
@@ -2198,7 +2409,7 @@ let shadowT = 0;
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, pickUp, dropPet, hands, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
+window.petPark = { birds, animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, pickUp, dropPet, hands, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
@@ -2225,6 +2436,7 @@ renderer.setAnimationLoop(() => {
   updateBalls(dt);
   updateFeeder(dt, t);
   updateTrays(t);
+  updateBirds(dt, t);
   updateParticles(dt);
   scenery?.update?.(dt, t, playerPos);
   shadowT -= dt;
