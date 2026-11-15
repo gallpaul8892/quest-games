@@ -1594,7 +1594,7 @@ function updateAnimal(a, dt, t, player) {
         }
         if (Math.random() < dt * 0.4 && canPlay('yip', 1.2)) yip(0.6, a.voice);
       } else {
-        if (a.heldT < 20) {
+        if (a.heldT < CAT_HOLD_OK) {
           // content for a while: purrs and hearts
           if (Math.random() < dt * 0.25 && canPlay('purr', 2.5)) purr(0.8);
           if (Math.random() < dt * 0.5) { a.head.getWorldPosition(tmpV2); tmpV2.y += 0.1; spawnParticle('heart', tmpV2); }
@@ -1602,7 +1602,7 @@ function updateAnimal(a, dt, t, player) {
           // had enough: meows and wriggles, then hops down
           if (Math.random() < dt * 1.2 && canPlay('meow', 0.9)) meow(0.9, a.voice * 1.15);
           if (Math.random() < dt * 4) { haptic(0, 0.4, 50); haptic(1, 0.4, 50); }
-          if (a.heldT > 26) { dropPet(a, true); break; }
+          if (a.heldT > CAT_HOLD_OK + 6) { dropPet(a, true); break; }
         }
       }
       break;
@@ -1850,7 +1850,7 @@ function updateAnimal(a, dt, t, player) {
   // ----- animation -----
   const lyingNow = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch'));
   if (a.mode === 'held' || a.mode === 'falling') {
-    play(a, a.isDog ? 'idle2' : 'idle', { timeScale: a.mode === 'held' && !a.isDog && a.heldT > 20 ? 2.5 : 1 });
+    play(a, a.isDog ? 'idle2' : 'idle', { timeScale: a.mode === 'held' && !a.isDog && a.heldT > CAT_HOLD_OK ? 2.5 : 1 });
   } else if (lyingNow) {
     play(a, a.isDog ? 'sniff' : 'idle', { timeScale: 0.18 });   // slow sleepy breathing
   } else if (a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) {
@@ -1894,7 +1894,7 @@ function updateAnimal(a, dt, t, player) {
   if (a.mode === 'held') {
     a.model.rotation.x = -0.45;                                          // held up, head toward you
     if (a.isDog && a.lickAnim > 0) zOff = Math.sin((1 - a.lickAnim / 0.35) * Math.PI) * 0.14;   // lunge in for a lick
-    if (!a.isDog && a.heldT > 20) { roll = Math.sin(t * 17) * 0.35; zOff = Math.sin(t * 11) * 0.03; }   // wriggle
+    if (!a.isDog && a.heldT > CAT_HOLD_OK) { roll = Math.sin(t * 17) * 0.35; zOff = Math.sin(t * 11) * 0.03; }   // wriggle
   }
   a.model.rotation.z += (roll - a.model.rotation.z) * (1 - Math.exp(-15 * dt));
   a.model.position.z = a.modelBaseZ + zOff / g.scale.x;
@@ -2047,6 +2047,7 @@ function ballOnRay(ray, maxDist) {
 }
 
 // ---------- Picking pets up with two hands ----------
+const CAT_HOLD_OK = 10;   // seconds a cat is happy to be held before it starts wriggling
 function pickUp(a) {
   if (a.fight) resolveFight(a.fight);
   if (a.carrying) { const b = dropCarried(a); if (b) b.vel.set(0, 0.5, 0); }
