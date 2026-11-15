@@ -770,7 +770,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   for (const [role, clip] of Object.entries(tpl.clips)) actions[role] = mixer.clipAction(clip);
 
   const a = {
-    kind, name, isDog, group, model, hungryIconSprite: hungryIcon, modelBaseY: model.position.y, head, body: bodyAnchor, label,
+    kind, name, isDog, group, model, hungryIconSprite: hungryIcon, modelBaseY: model.position.y, modelBaseZ: model.position.z, heldT: 0, lickT: 0, lickAnim: 0, vy: 0, escaped: false, head, body: bodyAnchor, label,
     mixer, actions, current: null, oneShotUntil: 0, idleKey: 'idle',
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
     size: (isDog ? 1 : 0.72) * variation, len: tpl.cfg.length * variation,
@@ -979,7 +979,8 @@ function updateBalls(dt) {
 }
 
 // ---------- Ball handling ----------
-const hands = [{ ball: null, btn: null, hist: [] }, { ball: null, btn: null, hist: [] }];
+const hands = [{ ball: null, btn: null, hist: [], grab: null }, { ball: null, btn: null, hist: [], grab: null }];
+let heldPet = null;
 let deskBall = null;
 const holders = [new THREE.Object3D(), new THREE.Object3D()];   // follow hand pinch / controller grip
 holders.forEach(h => scene.add(h));
@@ -1020,7 +1021,7 @@ function fakeThrow(point) {
   fakeCooldownUntil = clock.elapsedTime + 2;
   let fooled = 0, barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.hunger > HUNGRY) continue;
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.mode === 'held' || d.mode === 'falling' || d.hunger > HUNGRY) continue;
     toWander(d);
     d.mode = 'fooled'; d.fakePhase = 'run'; d.fakeRunT = 0; d.excite = rand(0.92, 1.08);
     const ang = rand(0, Math.PI * 2), rad = rand(0.3, 1.8);
@@ -1045,7 +1046,7 @@ function throwBall(b, vel) {
 function dogsChase(b) {
   let barks = 0;
   for (const d of dogs) {
-    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.hunger > HUNGRY) continue;   // too hungry (or sleepy) to care
+    if (d.mode === 'fetch' || d.mode === 'fight' || d.mode === 'eat' || d.mode === 'sleep' || d.mode === 'held' || d.mode === 'falling' || d.hunger > HUNGRY) continue;   // too hungry (or sleepy, or being held) to care
     toWander(d);
     d.mode = 'chase'; d.ball = b; d.chaseT = 0; d.excite = rand(0.92, 1.08);
     if (barks < 3 && Math.random() < 0.4) {
@@ -1381,6 +1382,59 @@ function updateAnimal(a, dt, t, player) {
       }
       break;
     }
+    case 'held': {
+      direct = true;
+      const mid = heldPoint(tmpV);
+      if (!mid || mid.distanceTo(playerPos) > 1.4) { dropPet(a); break; }
+      a.heldT += dt;
+      p.set(mid.x, Math.max(0, mid.y - a.body.position.y * g.scale.x), mid.z);
+      turnTo(a, Math.atan2(playerPos.x - p.x, playerPos.z - p.z), dt, 10);
+      if (a.isDog) {
+        // tries to lick your face
+        a.lickT -= dt;
+        if (a.lickT <= 0 && a.lickAnim <= 0) { a.lickAnim = 0.35; a.lickT = rand(0.7, 1.6); }
+        if (a.lickAnim > 0) {
+          const before = a.lickAnim;
+          a.lickAnim -= dt;
+          if (before > 0.175 && a.lickAnim <= 0.175) {
+            a.head.getWorldPosition(tmpV2);
+            if (tmpV2.distanceTo(playerPos) < 0.6) {
+              slurp(1); spawnParticle('heart', tmpV2.lerp(playerPos, 0.5));
+              haptic(0, 0.3, 40); haptic(1, 0.3, 40);
+            }
+          }
+        }
+        if (Math.random() < dt * 0.4 && canPlay('yip', 1.2)) yip(0.6, a.voice);
+      } else {
+        if (a.heldT < 20) {
+          // content for a while: purrs and hearts
+          if (Math.random() < dt * 0.25 && canPlay('purr', 2.5)) purr(0.8);
+          if (Math.random() < dt * 0.5) { a.head.getWorldPosition(tmpV2); tmpV2.y += 0.1; spawnParticle('heart', tmpV2); }
+        } else {
+          // had enough: meows and wriggles, then hops down
+          if (Math.random() < dt * 1.2 && canPlay('meow', 0.9)) meow(0.9, a.voice * 1.15);
+          if (Math.random() < dt * 4) { haptic(0, 0.4, 50); haptic(1, 0.4, 50); }
+          if (a.heldT > 26) { dropPet(a, true); break; }
+        }
+      }
+      break;
+    }
+    case 'falling': {
+      direct = true;
+      a.vy -= 9.8 * dt;
+      p.y += a.vy * dt;
+      if (a.escaped) { p.x += Math.sin(g.rotation.y + Math.PI) * 1.2 * dt; p.z += Math.cos(g.rotation.y + Math.PI) * 1.2 * dt; }
+      if (p.y <= 0) {
+        p.y = 0;
+        const esc = a.escaped;
+        toWander(a); a.idleT = esc ? 0 : 0.6;
+        if (esc) {   // dashes off
+          const ang = g.rotation.y + Math.PI + rand(-0.6, 0.6);
+          a.target = new THREE.Vector3(p.x + Math.sin(ang) * 3, 0, p.z + Math.cos(ang) * 3); a.zoom = true;
+        } else if (a.isDog) { a.petTimer = 1.2; a.heartT = 0; }
+      }
+      break;
+    }
     case 'litter': {
       const tr = a.tray;
       if (!tr) { toWander(a); break; }
@@ -1607,7 +1661,9 @@ function updateAnimal(a, dt, t, player) {
 
   // ----- animation -----
   const lyingNow = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch'));
-  if (lyingNow) {
+  if (a.mode === 'held' || a.mode === 'falling') {
+    play(a, a.isDog ? 'idle2' : 'idle', { timeScale: a.mode === 'held' && !a.isDog && a.heldT > 20 ? 2.5 : 1 });
+  } else if (lyingNow) {
     play(a, a.isDog ? 'sniff' : 'idle', { timeScale: 0.18 });   // slow sleepy breathing
   } else if (a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) {
     play(a, 'idle');
@@ -1640,8 +1696,16 @@ function updateAnimal(a, dt, t, player) {
   const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
   a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
   if (a.mode === 'climb' && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
+  let zOff = 0, roll = 0;
+  if (a.mode === 'held') {
+    a.model.rotation.x = -0.45;                                          // held up, head toward you
+    if (a.isDog && a.lickAnim > 0) zOff = Math.sin((1 - a.lickAnim / 0.35) * Math.PI) * 0.14;   // lunge in for a lick
+    if (!a.isDog && a.heldT > 20) { roll = Math.sin(t * 17) * 0.35; zOff = Math.sin(t * 11) * 0.03; }   // wriggle
+  }
+  a.model.rotation.z += (roll - a.model.rotation.z) * (1 - Math.exp(-15 * dt));
+  a.model.position.z = a.modelBaseZ + zOff / g.scale.x;
   a.model.position.y = a.modelBaseY + hop / g.scale.x - a.sinkCur;
-  a.label.visible = label && a.petTimer <= 0;
+  a.label.visible = label && a.petTimer <= 0 && a.mode !== 'held';
   const rowdy = isRowdy(a) && a.mode !== 'litter';
   const showHungry = (a.hunger > HUNGRY || rowdy) && a.mode !== 'eat' && !a.label.visible;
   a.hungryIconSprite.material = a.hunger > HUNGRY ? HUNGRY_MAT : TRAY_ICON_MAT;
@@ -1771,6 +1835,41 @@ function ballOnRay(ray, maxDist) {
   return best;
 }
 
+// ---------- Picking pets up with two hands ----------
+function pickUp(a) {
+  if (a.fight) resolveFight(a.fight);
+  if (a.carrying) { const b = dropCarried(a); if (b) b.vel.set(0, 0.5, 0); }
+  if (a.climb) { releasePlatform(a); a.climb = null; }
+  toWander(a);
+  a.mode = 'held'; a.heldT = 0; a.lickT = rand(0.6, 1.2); a.lickAnim = 0; a.escaped = false;
+  heldPet = a;
+  a.group.getWorldPosition(tmpV2);
+  if (a.isDog) { if (canPlay('yip', 0.2)) yip(volAt(tmpV2), a.voice); }
+  else if (canPlay('mrrp', 0.2)) mrrp(volAt(tmpV2), a.voice);
+  haptic(0, 0.5, 60); haptic(1, 0.5, 60);
+}
+function dropPet(a, escaped = false) {
+  if (heldPet === a) heldPet = null;
+  for (const h of hands) if (h.grab?.a === a) h.grab = null;
+  a.mode = 'falling'; a.vy = escaped ? 1.5 : 0; a.escaped = escaped;
+}
+const hp0 = new THREE.Vector3(), hp1 = new THREE.Vector3();
+function heldPoint(out) {
+  // midpoint between the two hands (window.__debugHands lets the desktop test harness fake two hands)
+  if (window.__debugHands) return out.copy(window.__debugHands[0]).add(window.__debugHands[1]).multiplyScalar(0.5);
+  if (!pinchPoint(0, hp0) || !pinchPoint(1, hp1)) return null;
+  return out.copy(hp0).add(hp1).multiplyScalar(0.5);
+}
+function slurp(vol = 1) {
+  if (!audioOK()) return;
+  const c = actx, t = c.currentTime;
+  const n = noise(c);
+  const f = c.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = 2;
+  f.frequency.setValueAtTime(600, t); f.frequency.exponentialRampToValueAtTime(2200, t + 0.12);
+  const g = c.createGain(); env(g, t, 0.35 * vol, 0.01, 0.06, 0.08);
+  n.connect(f).connect(g).connect(c.destination); n.start(t); n.stop(t + 0.2);
+}
+
 function pet(a, handIndex, stroking) {
   if (a.fight && a.fight.phase === 'tussle') resolveFight(a.fight);
   const fresh = a.petTimer <= 0;
@@ -1872,8 +1971,15 @@ for (let i = 0; i < 2; i++) {
     { const tr = trayNear(tmpV, 0.35); if (tr && cleanTray(tr, i)) return; }
     let b = ballNear(tmpV, isHand(i) ? 0.2 : 0.28);
     if (!b) {
-      const a = animalNear(tmpV, isHand(i) ? 0.45 : 0.6);
-      if (a) { pet(a, i, false); return; }
+      const otherGrab = hands[1 - i].grab?.a;
+      const a = (otherGrab && animalNear(tmpV, 0.75) === otherGrab) ? otherGrab : animalNear(tmpV, isHand(i) ? 0.45 : 0.6);
+      if (a) {
+        pet(a, i, false);
+        h.grab = { a, btn };
+        const other = hands[1 - i].grab;
+        if (other && other.a === a && !heldPet) pickUp(a);
+        return;
+      }
       b = ballOnRay(controllerRay(i), 12);
       if (!b) { const tr = trayOnRay(controllerRay(i), 4); if (tr) { cleanTray(tr, i); return; } }
     }
@@ -1882,6 +1988,11 @@ for (let i = 0; i < 2; i++) {
   };
   const release = (btn) => () => {
     const h = hands[i];
+    if (h.grab && h.grab.btn === btn) {
+      const a = h.grab.a; h.grab = null;
+      if (heldPet === a) dropPet(a);
+      return;
+    }
     if (h.ball && h.btn === btn) {
       const v = handVelocity(i).multiplyScalar(isHand(i) ? 1.6 : 1.4);
       if (v.length() > 16) v.setLength(16);
@@ -1961,7 +2072,7 @@ function updateHands(dt) {
       if (tip && Math.hypot(tip.x - BUTTON.x, tip.z - BUTTON.z) < 0.08 && tip.y < BUTTON.y + 0.06 && tip.y > BUTTON.y - 0.05) pressFeeder(i);
     }
     // stroking / patting with an empty hand
-    if (!hands[i].ball && palmPoint(i, tmpV)) {
+    if (!hands[i].ball && !hands[i].grab && palmPoint(i, tmpV)) {
       if (hasPrev[i] && dt > 0) {
         tmpV2.copy(tmpV).sub(prevPalm[i]).divideScalar(dt);
         const speed = tmpV2.length();
@@ -2087,7 +2198,7 @@ let shadowT = 0;
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
+window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, pickUp, dropPet, hands, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
