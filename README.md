@@ -4,7 +4,7 @@ WebXR games for the Meta Quest 3. They run straight in the Quest Browser, so the
 
 ## Games
 
-- **[Pet Park](pet-park/)** — a pet sandbox: choose up to 20 dogs and 20 cats on the start menu. Pet them, watch the cats have playful scuffles, and throw balls for the dogs to chase. The dogs pile on each other to get the ball, then bring it back to you. Pets get hungry over time: they whine and meow more, squabble more and ignore the ball until you feed them from the automatic feeder. Pets wear collars, nap about 30% of the time (cats in groups or up on the climbing frames), cats need clean litter trays or they get rowdy, and balls of yarn unravel as the cats bat them about. Garden birds (robins, blue tits, blackbirds and sparrows) circle overhead and land to peck at the grass; cats creep up, wiggle and pounce, but the birds always get away. Now and then a dog chases a cat round the park and gives up when the cat gets away.
+- **[Pet Park](pet-park/)** — a pet sandbox: choose up to 20 dogs and 20 cats on the start menu. Pet them, watch the cats have playful scuffles, and throw balls for the dogs to chase. The dogs pile on each other to get the ball, then bring it back to you. Pets get hungry over time: they whine and meow more, squabble more and ignore the ball until you feed them from the automatic feeder. Pets wear collars, nap about 30% of the time (cats in groups or up on the climbing frames), cats need clean litter trays or they get rowdy, and balls of yarn unravel as the cats bat them about. Garden birds (robins, blue tits, blackbirds and sparrows) circle overhead and land to peck at the grass; cats creep up, wiggle and pounce, but the birds always get away. Butterflies flutter about and land on the grass; cats chase and leap at them but never catch one. Now and then a dog chases a cat round the park and gives up when the cat gets away.
 
 ## Playing on the Quest
 
@@ -28,6 +28,7 @@ WebXR needs HTTPS, so host the repo with GitHub Pages:
 | Feed the pets | Press the big red FEED button (poke it with a finger or controller) | Press E, or click the button |
 | Pick up a pet | Grab it with both hands (grip or pinch); let go to put it down | — |
 | Clean a litter tray | Reach into the sand, or point at the tray and pinch/trigger | C, or click the tray |
+| Ask a cat to jump up | Point at a raised surface (table, cat tree, bench, rock) and quickly tap the trigger or pinch, or tap the surface with a fingertip | Click the surface |
 | Teleport | Hold trigger pointing at the ground, release to jump there | — |
 
 **Hand tracking (no controllers):** put the controllers down and the Quest switches to your hands.
