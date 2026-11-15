@@ -260,7 +260,7 @@ function makeEagles(src) {
     const wl = new THREE.Mesh(innerGeo, wingMat), wr = new THREE.Mesh(innerGeo, wingMat);
     wl.position.set(0.08, 0.03, 0.12); wr.position.set(-0.08, 0.03, 0.12); wr.scale.x = -1;
     root.add(wl, wr);
-    root.scale.setScalar(1 / 3);                   // a third of the original size
+    root.scale.setScalar(1 / 6);                   // a sixth of the original size
     root.traverse(o => { if (o.isMesh) o.castShadow = false; });
     const ang = rand(0, Math.PI * 2);
     root.position.set(Math.cos(ang) * 9, rand(8, 13), Math.sin(ang) * 9);
@@ -522,6 +522,63 @@ function updateTrays(t) {
     tr.stink.position.y = 0.3 + Math.sin(t * 1.5 + tr.z) * 0.03;
     tr.sign.visible = dirty;
   }
+}
+
+// ---------- Surfaces a cat can be asked to jump onto ----------
+const perches = [];   // simple round tops: { x, z, y, r }
+function registerPerches() {
+  perches.push({ x: TABLE.x, z: TABLE.z, y: TABLE.top + 0.01, r: TABLE.r * 0.8 });
+  for (const tr of catTrees) for (const pl of tr.platforms) perches.push({ x: pl.x, z: pl.z, y: pl.y + 0.01, r: pl.r * 0.8 });
+}
+const surfRay = new THREE.Raycaster();
+// Find a raised, roughly flat surface along a ray: our own perches first, then anything in the scenery (benches, rocks...)
+function surfaceOnRay(ray, maxDist = 14) {
+  let best = null, bestD = maxDist;
+  for (const pc of perches) {
+    if (Math.abs(ray.direction.y) < 1e-4) continue;
+    const tt = (pc.y - ray.origin.y) / ray.direction.y;
+    if (tt <= 0 || tt >= bestD) continue;
+    const x = ray.origin.x + ray.direction.x * tt, z = ray.origin.z + ray.direction.z * tt;
+    if (Math.hypot(x - pc.x, z - pc.z) < pc.r * 1.25) { bestD = tt; best = { point: new THREE.Vector3(x, pc.y, z), perch: pc }; }
+  }
+  if (scenery?.group) {
+    surfRay.set(ray.origin, ray.direction); surfRay.far = bestD;
+    for (const h of surfRay.intersectObject(scenery.group, true)) {
+      if (h.distance >= bestD) break;
+      if (!h.face) continue;
+      const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+      if (n.y < 0.6 || h.point.y < 0.18 || h.point.y > 2.0 || Math.hypot(h.point.x, h.point.z) > ARENA + 4) continue;
+      best = { point: h.point.clone(), perch: null }; bestD = h.distance; break;
+    }
+  }
+  return best;
+}
+function perchAtPoint(p, tol = 0.04) {
+  return perches.find(pc => Math.abs(p.y - pc.y) < tol && Math.hypot(p.x - pc.x, p.z - pc.z) < pc.r * 1.2);
+}
+let lastCatCommand = -9;
+function commandCatJump(point) {
+  const t = clock.elapsedTime;
+  if (t - lastCatCommand < 0.6) return;
+  let best = null, bd = 9;
+  for (const c of cats) {
+    if (c.sitter || ['held', 'falling', 'fight', 'litter', 'eat', 'perchJump', 'climb'].includes(c.mode)) continue;
+    const d = Math.hypot(c.group.position.x - point.x, c.group.position.z - point.z);
+    if (d < bd) { bd = d; best = c; }
+  }
+  // show where you tapped
+  for (let k = 0; k < 5; k++) spawnParticle('star', tmpV.copy(point).add(new THREE.Vector3(rand(-.08, .08), 0.05, rand(-.08, .08))));
+  if (!best) return;
+  lastCatCommand = t;
+  toWander(best);
+  const away = new THREE.Vector3(best.group.position.x - point.x, 0, best.group.position.z - point.z);
+  if (away.lengthSq() < 1e-4) away.set(0, 0, 1);
+  away.normalize();
+  const reach = 0.45 + 0.12 * point.y;
+  best.mode = 'perchJump';
+  best.pj = { stage: 'approach', point: point.clone(), launch: new THREE.Vector3(point.x + away.x * reach, 0, point.z + away.z * reach), away, t: 0 };
+  best.group.getWorldPosition(tmpV2);
+  if (canPlay('mrrp', 0.3)) mrrp(volAt(tmpV2), best.voice);
 }
 
 function freePlatform(tree, minIdx = 1) {
@@ -800,6 +857,7 @@ async function loadTemplate(kind) {
   }
   return { cfg, scene: root, k, height: size.y * k, minY: box.min.y * k, centerX: (box.min.x + box.max.x) / 2 * k, centerZ: (box.min.z + box.max.z) / 2 * k, clips: resolved };
 }
+registerPerches();
 const TPL = {};
 await Promise.all(['dog', 'cat', 'sphynx', 'fox'].map(async k => { TPL[k] = await loadTemplate(k); }));
 TPL.puppy = TPL.dog; TPL.kitten = TPL.cat;   // puppies and kittens are little dogs and cats
@@ -1282,7 +1340,7 @@ function toWander(a) {
     return;
   }
   if (a.climb) { releasePlatform(a); a.climb = null; }
-  a.lying = false; a.sleepSpot = null;
+  a.lying = false; a.sleepSpot = null; a.pj = null;
   if (a.stalkBird) { if (a.stalkBird.stalker === a) a.stalkBird.stalker = null; a.stalkBird = null; }
   if (a.tray) { if (a.tray.occupant === a) a.tray.occupant = null; a.tray = null; }
   a.inTray = false;
@@ -1582,6 +1640,47 @@ function updateAnimal(a, dt, t, player) {
         if (a.heartT <= 0) { a.heartT = 0.3; a.head.getWorldPosition(tmpV); tmpV.y += 0.12; spawnParticle('heart', tmpV); }
         a.model.rotation.z = Math.sin(t * (a.isDog ? 14 : 5)) * 0.06;
       } else a.model.rotation.z *= 0.9;
+      break;
+    }
+    case 'perchJump': {
+      const j = a.pj;
+      if (!j) { toWander(a); break; }
+      if (j.stage === 'approach') {
+        const d = steer(a, j.launch.x, j.launch.z, dt, 7);
+        want = a.fast * 0.7 * clamp(d / 0.8, 0.3, 1);
+        j.t += dt;
+        if (d < 0.15 || j.t > 10) { j.stage = 'crouch'; j.t = 0.4; }
+      } else if (j.stage === 'crouch') {
+        turnTo(a, Math.atan2(j.point.x - p.x, j.point.z - p.z), dt, 10);
+        j.t -= dt;
+        if (j.t <= 0) { j.stage = 'leap'; j.from = p.clone(); j.to = j.point.clone(); j.t0 = t; j.dur = 0.4 + 0.15 * j.to.y; playOnce(a, 'jump', t, 1.4); }
+      } else if (j.stage === 'leap' || j.stage === 'down') {
+        direct = true;
+        const k = Math.min(1, (t - j.t0) / j.dur);
+        p.lerpVectors(j.from, j.to, k);
+        p.y += Math.sin(k * Math.PI) * (0.18 + 0.25 * Math.abs(j.to.y - j.from.y));
+        turnTo(a, Math.atan2(j.to.x - j.from.x, j.to.z - j.from.z), dt, 14);
+        a.hopping = k;
+        if (k >= 1) {
+          a.hopping = 0; p.copy(j.to);
+          if (j.stage === 'leap') { j.stage = 'perch'; j.t = rand(8, 15); turnTo(a, Math.atan2(dxp, dzp), 1, 1); if (canPlay('meow', 0.8)) meow(volAt(p) * 0.6, a.voice); }
+          else { a.pj = null; p.y = 0; toWander(a); a.idleT = rand(0.5, 1.5); }
+        }
+      } else if (j.stage === 'perch') {
+        direct = true;
+        if (distP < 2.5 && !a.lying) turnTo(a, Math.atan2(dxp, dzp), dt, 3);
+        if (sleepy && !a.lying && a.hunger < HUNGRY) a.lying = true;
+        if (a.lying) {
+          a.zzzT -= dt;
+          if (a.zzzT <= 0) { a.zzzT = rand(1.3, 2.2); a.head.getWorldPosition(tmpV); tmpV.y += 0.1; spawnParticle('zzz', tmpV); }
+          if (!sleepy || a.hunger > HUNGRY || isRowdy(a)) { a.lying = false; j.t = rand(1, 2); }
+        } else j.t -= dt;
+        if (!a.lying && (j.t <= 0 || a.hunger > HUNGRY || isRowdy(a))) {
+          // hop back down, toward you if you're close
+          const dir = new THREE.Vector3(dxp, 0, dzp); if (dir.lengthSq() < 1e-4) dir.copy(j.away); dir.normalize();
+          j.stage = 'down'; j.from = p.clone(); j.to = new THREE.Vector3(p.x + dir.x * (0.5 + 0.2 * p.y), 0, p.z + dir.z * (0.5 + 0.2 * p.y)); j.t0 = t; j.dur = 0.35 + 0.12 * p.y;
+        }
+      }
       break;
     }
     case 'stalk': {
@@ -1908,15 +2007,15 @@ function updateAnimal(a, dt, t, player) {
   } else a.curSpeed = 0;
   const r = Math.hypot(p.x, p.z);
   if (r > ARENA + 1) { p.x *= (ARENA + 1) / r; p.z *= (ARENA + 1) / r; }
-  if (!direct && a.mode !== 'climb') p.y = 0;
+  if (!direct && a.mode !== 'climb' && !(a.mode === 'perchJump' && a.pj?.stage !== 'approach')) p.y = 0;
 
   // ----- animation -----
-  const lyingNow = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch'));
+  const lyingNow = a.lying && ((a.mode === 'sleep') || (a.mode === 'climb' && a.climb?.stage === 'perch') || (a.mode === 'perchJump' && a.pj?.stage === 'perch'));
   if (a.mode === 'held' || a.mode === 'falling') {
     play(a, a.isDog ? 'idle2' : 'idle', { timeScale: a.mode === 'held' && !a.isDog && a.heldT > CAT_HOLD_OK ? 2.5 : 1 });
   } else if (lyingNow) {
     play(a, a.isDog ? 'sniff' : 'idle', { timeScale: 0.18 });   // slow sleepy breathing
-  } else if (a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) {
+  } else if ((a.mode === 'climb' && (a.climb?.stage === 'hop' || a.climb?.stage === 'pause' || a.climb?.stage === 'perch')) || (a.mode === 'perchJump' && a.pj?.stage === 'perch')) {
     play(a, 'idle');
   } else if (t >= a.oneShotUntil) {
     if (tussle) {
@@ -1944,7 +2043,7 @@ function updateAnimal(a, dt, t, player) {
     a.model.rotation.x += (tilt - a.model.rotation.x) * (1 - Math.exp(-8 * dt));
   }
   const onPlatform = p.y > 0.05;
-  const crouch = a.mode === 'stalk' && (a.stalkPhase === 'creep' || a.stalkPhase === 'wiggle');
+  const crouch = (a.mode === 'stalk' && (a.stalkPhase === 'creep' || a.stalkPhase === 'wiggle')) || (a.mode === 'perchJump' && a.pj?.stage === 'crouch');
   const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : crouch ? a.sinkMax * 0.4 : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
   a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
   if (a.mode === 'climb' && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
@@ -2215,7 +2314,7 @@ function handVelocity(i) {
 }
 
 // teleport aiming
-const aiming = [false, false];
+const aiming = [false, false], aimStart = [0, 0], lastTipTap = [0, 0];
 const aimPoint = [new THREE.Vector3(), new THREE.Vector3()], aimValid = [false, false];
 const marker = new THREE.Mesh(new THREE.RingGeometry(0.22, 0.3, 32),
   new THREE.MeshBasicMaterial({ color: 0x4af0ff, transparent: true, opacity: 0.85, depthWrite: false }));
@@ -2267,7 +2366,7 @@ for (let i = 0; i < 2; i++) {
       if (!b) { const tr = trayOnRay(controllerRay(i), 4); if (tr) { cleanTray(tr, i); return; } }
     }
     if (b) { grabBall(b, i); h.btn = btn; haptic(i, 0.4, 50); return; }
-    if (btn === 'select') { aiming[i] = true; updateAim(i); }
+    if (btn === 'select') { aiming[i] = true; aimStart[i] = clock.elapsedTime; updateAim(i); }
   };
   const release = (btn) => () => {
     const h = hands[i];
@@ -2285,6 +2384,11 @@ for (let i = 0; i < 2; i++) {
     }
     if (btn === 'select' && aiming[i]) {
       aiming[i] = false;
+      // a quick tap on a raised surface asks a cat to jump up; a longer press still teleports
+      if (clock.elapsedTime - aimStart[i] < 0.4) {
+        const sf = surfaceOnRay(controllerRay(i));
+        if (sf) { commandCatJump(sf.point); haptic(i, 0.3, 40); return; }
+      }
       updateAim(i);
       if (aimValid[i]) { teleportTo(aimPoint[i]); haptic(i, 0.3, 40); }
     }
@@ -2348,6 +2452,14 @@ function updateHands(dt) {
     {
       const tip = hand ? jointWorld(i, 'index-finger-tip', tmpV3) : grips[i].getWorldPosition(tmpV3);
       if (tip && tip.y < 0.16) for (const tr of trays) if (Math.abs(tip.x - tr.x) < 0.24 && Math.abs(tip.z - tr.z) < 0.18) cleanTray(tr, i);
+    }
+    // tap the top of a perch (table, cat tree...) with a fingertip
+    {
+      const tip = hand ? jointWorld(i, 'index-finger-tip', tmpV3) : null;
+      if (tip && clock.elapsedTime - lastTipTap[i] > 1) {
+        const pc = perchAtPoint(tip, 0.03);
+        if (pc) { lastTipTap[i] = clock.elapsedTime; commandCatJump(new THREE.Vector3(tip.x, pc.y, tip.z)); }
+      }
     }
     // poke the feed button with a fingertip (hands) or the controller
     {
@@ -2457,7 +2569,9 @@ addEventListener('pointerup', e => {
   }
   const ballDist = b ? ballWorld(b, tmpV).distanceTo(raycaster.ray.origin) : Infinity;
   if (b && (!hitA || ballDist < hitD + 0.2)) { grabBall(b, -1); return; }
-  if (hitA && hitD < 2.8) pet(hitA, -1, false);
+  if (hitA && hitD < 2.8) { pet(hitA, -1, false); return; }
+  const sf = surfaceOnRay(raycaster.ray);
+  if (sf) commandCatJump(sf.point);
 });
 function updateDesktop(dt) {
   camera.rotation.set(pitch, yaw, 0);
@@ -2481,7 +2595,7 @@ let shadowT = 0;
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { birds, butterflies, animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, pickUp, dropPet, hands, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
+window.petPark = { commandCatJump, surfaceOnRay, perches, birds, butterflies, animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, pickUp, dropPet, hands, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;

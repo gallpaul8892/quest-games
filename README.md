@@ -28,7 +28,8 @@ WebXR needs HTTPS, so host the repo with GitHub Pages:
 | Feed the pets | Press the big red FEED button (poke it with a finger or controller) | Press E, or click the button |
 | Pick up a pet | Grab it with both hands (grip or pinch); let go to put it down | — |
 | Clean a litter tray | Reach into the sand, or point at the tray and pinch/trigger | C, or click the tray |
-| Teleport | Hold trigger pointing at the ground, release to jump there | — |
+| Ask a cat to jump up | Point at a raised surface (table, cat tree, bench, rock) and quickly tap the trigger or pinch, or tap the surface with a fingertip | Click the surface |
+| Teleport | Hold the trigger pointing at the ground, release to jump there (a quick tap on a raised surface calls a cat instead) | — |
 
 **Hand tracking (no controllers):** put the controllers down and the Quest switches to your hands.
 - Stroke or pat a pet with your palm.
