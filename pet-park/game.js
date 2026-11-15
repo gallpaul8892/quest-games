@@ -787,6 +787,61 @@ for (let i = 0; i < 4; i++) {
 const BALL_COLOURS = [[0xff5a5a, 0xffffff], [0x4a8cff, 0xffe14a], [0xff7ad9, 0xffffff], [0x9b6bff, 0x7cf0c0], [0xffa63d, 0x4a8cff], [0x5ad17a, 0xffffff], [0xc8e640, 0xffffff], [0xff5a5a, 0x4a8cff]];
 for (const [c, st] of BALL_COLOURS) { const p = spawnSpot(); makeBall(c, st, 0.06, p.x, 0.06, p.z); }
 
+// ---------- Balls of yarn: they unravel as they roll ----------
+const YARN_SEGS = 420;
+const yarnSegGeo = new THREE.BoxGeometry(0.009, 0.006, 1);
+function makeYarn(colour, x, z) {
+  const r0 = 0.075;
+  const parts = [new THREE.IcosahedronGeometry(r0 * 0.93, 2)];
+  for (let i = 0; i < 9; i++) {
+    const t = new THREE.TorusGeometry(r0 * rand(0.86, 0.97), 0.008, 4, 28);
+    t.rotateX(rand(0, Math.PI)); t.rotateY(rand(0, Math.PI)); t.rotateZ(rand(0, Math.PI));
+    parts.push(t.toNonIndexed());
+  }
+  parts[0] = parts[0].index ? parts[0].toNonIndexed() : parts[0];
+  for (const g of parts) { g.deleteAttribute('uv'); }
+  const mat = new THREE.MeshStandardMaterial({ color: colour, roughness: 1, flatShading: true });
+  const mesh = new THREE.Mesh(mergeGeometries(parts), mat);
+  mesh.castShadow = true;
+  mesh.position.set(x, r0, z);
+  scene.add(mesh);
+  const strand = new THREE.InstancedMesh(yarnSegGeo, mat, YARN_SEGS);
+  strand.count = 0; strand.frustumCulled = false;
+  strand.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(strand);
+  const b = { mesh, r: r0, r0, vel: new THREE.Vector3(), state: 'free', thrown: false, carrier: null, hand: null, fight: null, tackles: 0,
+              yarn: true, unwound: 0, strand, last: null };
+  balls.push(b);
+  return b;
+}
+const segM = new THREE.Matrix4(), segQ = new THREE.Quaternion(), segS = new THREE.Vector3(), segP = new THREE.Vector3(), segE = new THREE.Euler();
+function unravel(b, ds) {
+  if (b.unwound >= 1) return;
+  b.unwound = Math.min(1, b.unwound + ds / 14);              // fully unravelled after ~14 m of rolling
+  b.r = b.r0 * (1 - 0.6 * b.unwound);
+  b.mesh.scale.setScalar(b.r / b.r0);
+  const here = new THREE.Vector3(b.mesh.position.x, 0.004, b.mesh.position.z);
+  if (!b.last) { b.last = here; return; }
+  const len = here.distanceTo(b.last);
+  if (len < 0.035 || b.strand.count >= YARN_SEGS) return;
+  segP.addVectors(here, b.last).multiplyScalar(0.5);
+  segE.set(0, Math.atan2(here.x - b.last.x, here.z - b.last.z), 0); segQ.setFromEuler(segE);
+  segS.set(1, 1, len);
+  segM.compose(segP, segQ, segS);
+  b.strand.setMatrixAt(b.strand.count++, segM);
+  b.strand.instanceMatrix.needsUpdate = true;
+  b.last = here;
+}
+function rewind(b) {
+  b.unwound = 0; b.r = b.r0; b.mesh.scale.setScalar(1);
+  b.strand.count = 0; b.last = null;
+}
+const YARN_COLOURS = [0xe8463a, 0x3b7fd9, 0x9b5de5, 0x2fb36a, 0xffc93c, 0xff7eb6];
+YARN_COLOURS.forEach((c, i) => {
+  const tr = catTrees[i % catTrees.length], ang = rand(0, Math.PI * 2);
+  makeYarn(c, tr.x + Math.cos(ang) * rand(1, 2), tr.z + Math.sin(ang) * rand(1, 2));
+});
+
 const ballWorld = (b, out) => b.mesh.getWorldPosition(out);
 
 function updateBalls(dt) {
@@ -800,15 +855,16 @@ function updateBalls(dt) {
     const floorY = onTable ? TABLE.top + b.r : b.r;
     if (p.y < floorY) {
       p.y = floorY;
-      if (b.vel.y < -1.5 && canPlay('boing', 0.08)) boing(volAt(p) * 0.6);
-      if (b.vel.y < 0) b.vel.y = -b.vel.y * 0.5;
+      if (!b.yarn && b.vel.y < -1.5 && canPlay('boing', 0.08)) boing(volAt(p) * 0.6);
+      if (b.vel.y < 0) b.vel.y = -b.vel.y * (b.yarn ? 0.25 : 0.5);
       if (Math.abs(b.vel.y) < 0.4) b.vel.y = 0;
-      const f = Math.exp(-(onTable ? 5 : 1.1) * dt);
+      const f = Math.exp(-(onTable ? 5 : b.yarn ? 1.7 : 1.1) * dt);
       b.vel.x *= f; b.vel.z *= f;
       const hs = Math.hypot(b.vel.x, b.vel.z);
       if (hs > 0.01) {
         tmpV.set(b.vel.z, 0, -b.vel.x).normalize();
         b.mesh.rotateOnWorldAxis(tmpV, hs * dt / b.r);
+        if (b.yarn && !onTable) unravel(b, hs * dt);
       }
     }
     const pr = Math.hypot(p.x, p.z), wall = ARENA + 2;
@@ -841,6 +897,7 @@ function grabBall(b, handIndex) {
   b.state = 'held';
   if (b.fight) resolveFight(b.fight);
   b.thrown = false; b.vel.set(0, 0, 0); b.hand = handIndex;
+  if (b.yarn) rewind(b);   // winding it back up
   const holder = handIndex >= 0 ? holders[handIndex] : camera;
   holder.add(b.mesh);
   b.mesh.scale.setScalar(1);
@@ -1107,11 +1164,12 @@ function chooseTarget(a, player) {
     let best = null, bd = 6;
     for (const b of balls) {
       if (b.state !== 'free' || b.thrown || b.mesh.position.y > 0.3) continue;
+      if (a.isDog && b.yarn) continue;
       if (animals.filter(o => o.mode === 'play' && o.ball === b).length >= 2) continue;
-      const d = b.mesh.position.distanceTo(a.group.position);
+      const d = b.mesh.position.distanceTo(a.group.position) * (!a.isDog && b.yarn ? 0.4 : 1);   // cats much prefer yarn
       if (d < bd) { bd = d; best = b; }
     }
-    if (best) { a.mode = 'play'; a.ball = best; a.bats = 2 + Math.floor(rand(0, 3)); return; }
+    if (best) { a.mode = 'play'; a.ball = best; a.bats = best.yarn ? 3 + Math.floor(rand(0, 4)) : 2 + Math.floor(rand(0, 3)); return; }
   }
   const distToPlayer = Math.hypot(player.x - a.group.position.x, player.z - a.group.position.z);
   if (a.isDog && distToPlayer > 3 && Math.random() < 0.1) {
@@ -1358,7 +1416,8 @@ function updateAnimal(a, dt, t, player) {
       if (a.pounce > 0) a.pounce -= dt;
       else if (dHead < 0.2 && bp.y < 0.3) {
         const ang = g.rotation.y + rand(-1, 1), sp = rand(1.2, 3);
-        b.vel.set(Math.sin(ang) * sp, rand(0.6, 1.8), Math.cos(ang) * sp);
+        if (b.yarn) b.vel.set(Math.sin(ang) * sp * 0.7, rand(0.15, 0.6), Math.cos(ang) * sp * 0.7);
+        else b.vel.set(Math.sin(ang) * sp, rand(0.6, 1.8), Math.cos(ang) * sp);
         a.pounce = 0.5; a.bats--;
         playOnce(a, 'jump', t, 1.3);
         if (!a.isDog && canPlay('mrrp', 0.4) && Math.random() < 0.5) mrrp(volAt(p) * 0.7, a.voice);
