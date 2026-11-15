@@ -69,7 +69,9 @@ renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
-document.body.appendChild(VRButton.createButton(renderer, { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] }));
+const vrButton = VRButton.createButton(renderer, { optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking'] });
+vrButton.style.visibility = 'hidden';
+document.body.appendChild(vrButton);
 
 const ARENA = 9.5;
 const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3(), tmpV3 = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
@@ -120,11 +122,8 @@ function makeTextSprite(text, w, h, fontPx, worldW) {
   return s;
 }
 
-const hello = makeTextPanel('Hello, World!', 1024, 256, 130, 1.6);
-hello.position.set(0, 2.1, -2.5);
-scene.add(hello);
 const scorePanel = makeTextPanel('', 2000, 128, 46, 2.6);
-scorePanel.position.set(0, 1.75, -2.5);
+scorePanel.position.set(0, 1.85, -2.8);
 scene.add(scorePanel);
 
 const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0, meals: 0 };
@@ -496,8 +495,10 @@ const HUNGRY_MAT = new THREE.SpriteMaterial({ depthWrite: false, transparent: tr
 })() });
 
 // ---------- Animals ----------
-const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy'];
-const CAT_NAMES = ['Mochi', 'Tilly', 'Smudge', 'Willow', 'Haggis', 'Pixel', 'Clover', 'Nutmeg', 'Luna', 'Pudding', 'Socks'];
+const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy',
+  'Bella', 'Duke', 'Poppy', 'Bruno', 'Daisy', 'Hector', 'Skye', 'Monty', 'Rosie'];
+const CAT_NAMES = ['Mochi', 'Tilly', 'Smudge', 'Willow', 'Haggis', 'Pixel', 'Clover', 'Nutmeg', 'Luna', 'Pudding', 'Socks',
+  'Oscar', 'Misty', 'Ziggy', 'Bramble', 'Toast', 'Pebble', 'Ginger', 'Shadow', 'Biscotti'];
 // dog coats: [main, light]
 // Dog line-up: breed, size multiplier and coat [main, light]. Small, medium and large.
 const TAN = [0xc47a35, 0xf3e9da], CREAM = [0xead9bd, 0xfaf5ec], BLACKTAN = [0x2b2622, 0xd9b48a], SESAME = [0x8a6540, 0xeadcc6];
@@ -619,10 +620,49 @@ function spawnSpot() {
   const ang = rand(0, Math.PI * 2), r = rand(2.5, 8.5);
   return { x: Math.cos(ang) * r, z: Math.sin(ang) * r };
 }
-const dogs = DOG_NAMES.map((name, i) => makeAnimal({ kind: 'dog', name, ...DOG_TYPES[i % DOG_TYPES.length], ...spawnSpot() }));
-const cats = CAT_NAMES.map((name, i) => makeAnimal({ kind: 'cat', name, mul: [0.85, 1, 1.1, 0.7][i % 4], coat: CAT_TINTS[i % CAT_TINTS.length], ...spawnSpot() }));
-const animals = [...dogs, ...cats];
-statusEl.textContent = 'Ready! Tap “Enter VR” on your Quest.';
+const dogs = [], cats = [], animals = [];
+function despawnPets() {
+  for (const f of [...fights]) resolveFight(f);
+  for (const a of animals) {
+    if (a.carrying) dropCarried(a);
+    toWander(a);
+    scene.remove(a.group);
+    a.mixer.stopAllAction();
+  }
+  dogs.length = 0; cats.length = 0; animals.length = 0;
+  for (const b of balls) { if (b.state === 'carried') { scene.attach(b.mesh); b.state = 'free'; b.carrier = null; } }
+}
+function spawnPets(nDogs, nCats) {
+  despawnPets();
+  for (let i = 0; i < nDogs; i++) dogs.push(makeAnimal({ kind: 'dog', name: DOG_NAMES[i % DOG_NAMES.length], ...DOG_TYPES[i % DOG_TYPES.length], ...spawnSpot() }));
+  for (let i = 0; i < nCats; i++) cats.push(makeAnimal({ kind: 'cat', name: CAT_NAMES[i % CAT_NAMES.length], mul: [0.85, 1, 1.1, 0.7][i % 4], coat: CAT_TINTS[i % CAT_TINTS.length], ...spawnSpot() }));
+  animals.push(...dogs, ...cats);
+}
+
+// ---------- Start menu ----------
+{
+  const menu = document.getElementById('menu');
+  const dogIn = document.getElementById('dogCount'), catIn = document.getElementById('catCount');
+  const dogOut = document.getElementById('dogVal'), catOut = document.getElementById('catVal');
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem('petpark-counts') || '{}'); } catch (e) {}
+  dogIn.value = saved.dogs ?? 10; catIn.value = saved.cats ?? 10;
+  const show = () => { dogOut.textContent = dogIn.value; catOut.textContent = catIn.value; };
+  dogIn.oninput = catIn.oninput = show; show();
+  document.getElementById('startBtn').onclick = () => {
+    const nd = +dogIn.value, nc = +catIn.value;
+    try { localStorage.setItem('petpark-counts', JSON.stringify({ dogs: nd, cats: nc })); } catch (e) {}
+    spawnPets(nd, nc);
+    menu.style.display = 'none';
+    document.getElementById('changeBtn').style.display = 'block';
+    vrButton.style.visibility = 'visible';
+    statusEl.textContent = `${nd} dog${nd === 1 ? '' : 's'} and ${nc} cat${nc === 1 ? '' : 's'} are waiting. Tap “Enter VR” on your Quest.`;
+    audio();
+  };
+  document.getElementById('changeBtn').onclick = () => { menu.style.display = 'flex'; };
+  menu.style.display = 'flex';
+  statusEl.textContent = 'Choose your pets to begin.';
+}
 
 // ---------- Balls ----------
 const balls = [];
@@ -1625,6 +1665,5 @@ renderer.setAnimationLoop(() => {
   updateParticles(dt);
   scenery?.update?.(dt, t, playerPos);
 
-  hello.position.y = 2.1 + Math.sin(t * 1.5) * 0.03;
   renderer.render(scene, camera);
 });

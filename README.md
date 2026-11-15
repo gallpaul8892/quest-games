@@ -4,7 +4,7 @@ WebXR games for the Meta Quest 3. They run straight in the Quest Browser, so the
 
 ## Games
 
-- **[Pet Park](pet-park/)** — a Hello World sandbox with 11 dogs and 11 cats. Pet them, watch the cats have playful scuffles, and throw balls for the dogs to chase. The dogs pile on each other to get the ball, then bring it back to you. Pets get hungry over time: they whine and meow more, squabble more and ignore the ball until you feed them from the automatic feeder. Now and then a dog chases a cat round the park and gives up when the cat gets away.
+- **[Pet Park](pet-park/)** — a pet sandbox: choose up to 20 dogs and 20 cats on the start menu. Pet them, watch the cats have playful scuffles, and throw balls for the dogs to chase. The dogs pile on each other to get the ball, then bring it back to you. Pets get hungry over time: they whine and meow more, squabble more and ignore the ball until you feed them from the automatic feeder. Now and then a dog chases a cat round the park and gives up when the cat gets away.
 
 ## Playing on the Quest
 
