@@ -29,6 +29,13 @@ const MODEL_CONFIG = {
       eat: ['Eating', 'Idle_2_HeadLow'],
     },
   },
+  fox: {
+    // Fennec fox generated with afk.ai (supplied by Paul). Clips: Walk, Trot, Run — no idle, so idle holds a still pose
+    url: './models/fennec-fox.glb', length: 0.58, yaw: 0, sinkFrac: 0.28, staticIdle: true,
+    headBone: 'Head', collar: { from: 'Spine_4', to: 'Head', t: 0.35, r: 0.037 },
+    walkNative: 0.9, runNative: 3.0,
+    clips: { walk: ['Walk'], run: ['Run', 'Trot'], trot: ['Trot'] },
+  },
   husky: {
     url: './models/husky.glb', length: 1.0, yaw: 0,
     walkNative: 1.25, runNative: 4.0,
@@ -779,8 +786,8 @@ async function loadTemplate(kind) {
   }
   return { cfg, scene: root, k, height: size.y * k, minY: box.min.y * k, centerX: (box.min.x + box.max.x) / 2 * k, centerZ: (box.min.z + box.max.z) / 2 * k, clips: resolved };
 }
-const [dogTpl, huskyTpl, catTpl] = await Promise.all([loadTemplate('dog'), loadTemplate('husky'), loadTemplate('cat')]);
-const TPL = { dog: dogTpl, husky: huskyTpl, cat: catTpl };
+const [dogTpl, huskyTpl, catTpl, foxTpl] = await Promise.all([loadTemplate('dog'), loadTemplate('husky'), loadTemplate('cat'), loadTemplate('fox')]);
+const TPL = { dog: dogTpl, husky: huskyTpl, cat: catTpl, fox: foxTpl };
 
 // ---------- Hunger icon ----------
 const HUNGRY_MAT = new THREE.SpriteMaterial({ depthWrite: false, transparent: true, map: (() => {
@@ -891,7 +898,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
     const collar = new THREE.Mesh(collarGeometry(COLLAR_COLOURS[collarIdx++ % COLLAR_COLOURS.length]), COLLAR_MAT);
     collar.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(xAxis, yAxis, zAxis));
     collar.position.copy(pa).lerp(pb, cc.t);
-    collar.scale.setScalar(cc.r * tpl.cfg.length / (kind === 'dog' ? 0.8 : 0.5) * (breed === 'husky' ? 0.8 : 1));
+    collar.scale.setScalar(breed === 'fox' ? cc.r : cc.r * tpl.cfg.length / (kind === 'dog' ? 0.8 : 0.5) * (breed === 'husky' ? 0.8 : 1));
     group.add(collar);
     (cc.to === tpl.cfg.headBone && cc.t > 0.5 ? hb : nb).attach(collar);
   }
@@ -919,17 +926,21 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
   const mixer = new THREE.AnimationMixer(model);
   const actions = {};
   for (const [role, clip] of Object.entries(tpl.clips)) actions[role] = mixer.clipAction(clip);
+  if (tpl.cfg.staticIdle && tpl.clips.walk) {
+    const still = mixer.clipAction(tpl.clips.walk.clone());
+    actions.idle = actions.idle2 = actions.sniff = still;
+  }
 
   const a = {
     kind, name, isDog, group, model, hungryIconSprite: hungryIcon, modelBaseY: model.position.y, modelBaseZ: model.position.z, heldT: 0, lickT: 0, lickAnim: 0, vy: 0, escaped: false, head, body: bodyAnchor, label,
     mixer, actions, current: null, oneShotUntil: 0, idleKey: 'idle',
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
     size: (isDog ? 1 : 0.72) * variation, len: tpl.cfg.length * variation,
-    cycleLen: rand(70, 120), sleepFrac: isDog ? 0.27 : 0.34, cycleT: 0, lying: false, sinkCur: 0, sinkMax: tpl.height * (isDog ? 0.3 : 0.24), zzzT: 0, climb: null, sleepSpot: null,
+    cycleLen: rand(70, 120), sleepFrac: isDog ? 0.27 : 0.34, cycleT: 0, lying: false, sinkCur: 0, sinkMax: tpl.height * (tpl.cfg.sinkFrac ?? (isDog ? 0.3 : 0.24)), staticIdle: !!tpl.cfg.staticIdle, zzzT: 0, climb: null, sleepSpot: null,
     toilet: rand(0, 0.4), toiletRate: isDog ? 0 : 1 / rand(90, 150), tray: null, inTray: false, litterT: 0,
     hunger: rand(0.15, 0.5), hungerRate: 1 / rand(100, 170), bowl: null, eatingNow: false, foodCheckT: rand(0, 0.5), hungryIcon: null,
     speed: (isDog ? 1.1 : 0.8) * (0.6 + 0.4 * variation) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * (0.7 + 0.3 * variation) * rand(0.9, 1.1),
-    voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation), 0.7, 1.5), seed: rand(0, 100),
+    voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation) * (breed === 'fox' ? 1.45 : 1), 0.7, 1.8), seed: rand(0, 100),
     mode: 'wander', target: null, idleT: rand(0, 2), zoom: false,
     curSpeed: 0, petTimer: 0, heartT: 0, lastSound: -10, stroke: 0,
     ball: null, carrying: null, fight: null, followTarget: null, followT: 0, chaseT: 0, excite: 1, bats: 0, pounce: 0, tussleT: 0,
@@ -944,6 +955,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
 function play(a, role, { once = false, fade = 0.25, timeScale = 1 } = {}) {
   const act = a.actions[role];
   if (!act) return 0;
+  if (a.staticIdle && (role === 'idle' || role === 'idle2' || role === 'sniff')) timeScale = 0;   // hold a still pose
   if (a.current === act && !once) { act.timeScale = timeScale; return 0; }
   act.reset();
   act.setLoop(once ? THREE.LoopOnce : THREE.LoopRepeat, Infinity);
@@ -983,31 +995,33 @@ function despawnPets() {
   dogs.length = 0; cats.length = 0; animals.length = 0;
   for (const b of balls) { if (b.state === 'carried') { scene.attach(b.mesh); b.state = 'free'; b.carrier = null; } }
 }
-function spawnPets(nDogs, nCats) {
+const FOX_NAMES = ['Sandy', 'Zara', 'Sahara', 'Pip', 'Dune', 'Rusty', 'Nala', 'Kit', 'Ember', 'Sirocco'];
+function spawnPets(nDogs, nCats, nFoxes = 0) {
   despawnPets();
   for (let i = 0; i < nDogs; i++) dogs.push(makeAnimal({ kind: 'dog', name: DOG_NAMES[i % DOG_NAMES.length], ...DOG_TYPES[i % DOG_TYPES.length], ...spawnSpot() }));
   for (let i = 0; i < nCats; i++) cats.push(makeAnimal({ kind: 'cat', name: CAT_NAMES[i % CAT_NAMES.length], mul: [0.85, 1, 1.1, 0.7][i % 4], coat: CAT_TINTS[i % CAT_TINTS.length], ...spawnSpot() }));
+  for (let i = 0; i < nFoxes; i++) dogs.push(makeAnimal({ kind: 'dog', breed: 'fox', name: FOX_NAMES[i % FOX_NAMES.length], mul: [1, 0.9, 1.1][i % 3], coat: [0, 0], ...spawnSpot() }));
   animals.push(...dogs, ...cats);
 }
 
 // ---------- Start menu ----------
 {
   const menu = document.getElementById('menu');
-  const dogIn = document.getElementById('dogCount'), catIn = document.getElementById('catCount');
-  const dogOut = document.getElementById('dogVal'), catOut = document.getElementById('catVal');
+  const dogIn = document.getElementById('dogCount'), catIn = document.getElementById('catCount'), foxIn = document.getElementById('foxCount');
+  const dogOut = document.getElementById('dogVal'), catOut = document.getElementById('catVal'), foxOut = document.getElementById('foxVal');
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem('petpark-counts') || '{}'); } catch (e) {}
-  dogIn.value = saved.dogs ?? 10; catIn.value = saved.cats ?? 10;
-  const show = () => { dogOut.textContent = dogIn.value; catOut.textContent = catIn.value; };
-  dogIn.oninput = catIn.oninput = show; show();
+  dogIn.value = saved.dogs ?? 10; catIn.value = saved.cats ?? 10; foxIn.value = saved.foxes ?? 2;
+  const show = () => { dogOut.textContent = dogIn.value; catOut.textContent = catIn.value; foxOut.textContent = foxIn.value; };
+  dogIn.oninput = catIn.oninput = foxIn.oninput = show; show();
   document.getElementById('startBtn').onclick = () => {
-    const nd = +dogIn.value, nc = +catIn.value;
-    try { localStorage.setItem('petpark-counts', JSON.stringify({ dogs: nd, cats: nc })); } catch (e) {}
-    spawnPets(nd, nc);
+    const nd = +dogIn.value, nc = +catIn.value, nf = +foxIn.value;
+    try { localStorage.setItem('petpark-counts', JSON.stringify({ dogs: nd, cats: nc, foxes: nf })); } catch (e) {}
+    spawnPets(nd, nc, nf);
     menu.style.display = 'none';
     document.getElementById('changeBtn').style.display = 'block';
     vrButton.style.visibility = 'visible';
-    statusEl.textContent = `${nd} dog${nd === 1 ? '' : 's'} and ${nc} cat${nc === 1 ? '' : 's'} are waiting. Tap “Enter VR” on your Quest.`;
+    statusEl.textContent = `${nd} dog${nd === 1 ? '' : 's'}, ${nc} cat${nc === 1 ? '' : 's'}${nf ? ` and ${nf} fennec fox${nf === 1 ? '' : 'es'}` : ''} are waiting. Tap “Enter VR” on your Quest.`;
     audio();
   };
   document.getElementById('changeBtn').onclick = () => { menu.style.display = 'flex'; };
