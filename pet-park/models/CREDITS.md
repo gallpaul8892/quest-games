@@ -1,8 +1,7 @@
 # Model credits
 
-Both models are CC0 (public domain), so no credit is required. They're credited here anyway.
-
-- `dog.glb`: **Shiba Inu** from Quaternius, *Ultimate Animated Animal Pack* (CC0). Taken from github.com/jithujsam/pawse-app (apps/web/public/models/dog.glb).
-- `cat.glb`: **Cat** from Quaternius, *Animal Pack Vol.2* (CC0). Taken from github.com/JDaza13/ar-viewer (models/cat.glb).
-- `husky.glb`: **Husky** from Quaternius, *Ultimate Animated Animal Pack* (CC0). Taken from github.com/JDaza13/ar-viewer (models/big-dog.glb).
-- `fennec-fox.glb`: **Fennec fox**, generated with afk.ai and supplied by the project owner for evaluation (Walk, Trot and Run clips).
+- `rig-shiba.glb`: **Shiba Inu** from Quaternius, *Ultimate Animated Animal Pack* (CC0). Not shown in the game; its skeleton and animations are used to rig the afk.ai dog and cats (see `tools/retarget.mjs`). Source: github.com/jithujsam/pawse-app.
+- `dog.glb`, `cat.glb`, `sphynx.glb`: generated with **afk.ai**, supplied by the project owner, simplified and rigged with the Shiba skeleton.
+- `puppy.glb`, `kitten.glb`: generated with **afk.ai**, supplied by the project owner, simplified. They are sculpted sitting, so they stay sitting.
+- `eagle.glb`, `butterfly.glb`: generated with **afk.ai**, supplied by the project owner, simplified. The eagle gets spread wings in code; the butterfly's wings are split so they can flap.
+- `fennec-fox.glb`: **Fennec fox**, generated with afk.ai and supplied by the project owner (Walk, Trot and Run clips).
