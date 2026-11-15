@@ -20,9 +20,9 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 // skeleton + animations (models/rig-shiba.glb, Quaternius CC0) to each of them.
 const MODEL_CONFIG = {
   dog: {
-    url: './models/dog.glb', length: 0.9, yaw: 0, tint: true, sinkFrac: 0.3,
+    url: './models/dog.glb', length: 1.35, yaw: 0, tint: true, sinkFrac: 0.3,
     headBone: 'Head',
-    walkNative: 1.1, runNative: 3.6,
+    walkNative: 1.65, runNative: 5.4,
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
       walk: ['Walk'], run: ['Gallop'], jump: ['Gallop_Jump', 'Jump_ToIdle'],
@@ -260,6 +260,7 @@ function makeEagles(src) {
     const wl = new THREE.Mesh(innerGeo, wingMat), wr = new THREE.Mesh(innerGeo, wingMat);
     wl.position.set(0.08, 0.03, 0.12); wr.position.set(-0.08, 0.03, 0.12); wr.scale.x = -1;
     root.add(wl, wr);
+    root.scale.setScalar(1 / 3);                   // a third of the original size
     root.traverse(o => { if (o.isMesh) o.castShadow = false; });
     const ang = rand(0, Math.PI * 2);
     root.position.set(Math.cos(ang) * 9, rand(8, 13), Math.sin(ang) * 9);
