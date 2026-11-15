@@ -21,7 +21,7 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const MODEL_CONFIG = {
   dog: {
     url: './models/dog.glb', length: 0.9, yaw: 0, tint: true, sinkFrac: 0.3,
-    headBone: 'Head', collar: { from: 'Neck1', to: 'Head', t: 0.45, r: 0.085 },
+    headBone: 'Head',
     walkNative: 1.1, runNative: 3.6,
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
@@ -32,7 +32,7 @@ const MODEL_CONFIG = {
   },
   cat: {
     url: './models/cat.glb', length: 0.52, yaw: 0, tint: true, sinkFrac: 0.26,
-    headBone: 'Head', collar: { from: 'Neck1', to: 'Head', t: 0.45, r: 0.044 },
+    headBone: 'Head',
     walkNative: 0.65, runNative: 2.2,
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
@@ -43,7 +43,7 @@ const MODEL_CONFIG = {
   },
   sphynx: {
     url: './models/sphynx.glb', length: 0.5, yaw: 0, tint: true, sinkFrac: 0.28,
-    headBone: 'Head', collar: { from: 'Neck1', to: 'Head', t: 0.45, r: 0.04 },
+    headBone: 'Head',
     walkNative: 0.65, runNative: 2.2,
     clips: {
       idle: ['Idle'], idle2: ['Idle_2', 'Idle'], sniff: ['Idle_2_HeadLow', 'Eating'],
@@ -52,13 +52,10 @@ const MODEL_CONFIG = {
       eat: ['Eating', 'Idle_2_HeadLow'],
     },
   },
-  // the puppy and kitten were sculpted sitting down, so they stay sitting (no skeleton)
-  puppy: { url: './models/puppy.glb', length: 0.42, yaw: 0, static: true, tint: true, clips: {} },
-  kitten: { url: './models/kitten.glb', length: 0.24, yaw: 0, static: true, tint: true, clips: {} },
   fox: {
     // Fennec fox generated with afk.ai (supplied by Paul). Clips: Walk, Trot, Run — no idle, so idle holds a still pose
     url: './models/fennec-fox.glb', length: 0.58, yaw: 0, sinkFrac: 0.28, staticIdle: true,
-    headBone: 'Head', collar: { from: 'Spine_4', to: 'Head', t: 0.35, r: 0.037 },
+    headBone: 'Head',
     walkNative: 0.9, runNative: 3.0,
     clips: { walk: ['Walk'], run: ['Run', 'Trot'], trot: ['Trot'] },
   },
@@ -803,7 +800,8 @@ async function loadTemplate(kind) {
   return { cfg, scene: root, k, height: size.y * k, minY: box.min.y * k, centerX: (box.min.x + box.max.x) / 2 * k, centerZ: (box.min.z + box.max.z) / 2 * k, clips: resolved };
 }
 const TPL = {};
-await Promise.all(['dog', 'cat', 'sphynx', 'puppy', 'kitten', 'fox'].map(async k => { TPL[k] = await loadTemplate(k); }));
+await Promise.all(['dog', 'cat', 'sphynx', 'fox'].map(async k => { TPL[k] = await loadTemplate(k); }));
+TPL.puppy = TPL.dog; TPL.kitten = TPL.cat;   // puppies and kittens are little dogs and cats
 const [eagleGltf, butterflyGltf] = await Promise.all([loader.loadAsync('./models/eagle.glb'), loader.loadAsync('./models/butterfly.glb')]);
 makeEagles(eagleGltf.scene);
 makeButterflies(butterflyGltf.scene);
@@ -1019,10 +1017,10 @@ function spawnPets(nDogs, nCats, nFoxes = 0, nPuppies = 0, nKittens = 0) {
   despawnPets();
   for (let i = 0; i < nDogs; i++) dogs.push(makeAnimal({ kind: 'dog', name: DOG_NAMES[i % DOG_NAMES.length], ...DOG_TYPES[i % DOG_TYPES.length], ...spawnSpot() }));
   for (let i = 0; i < nCats; i++) cats.push(makeAnimal({ kind: 'cat', name: CAT_NAMES[i % CAT_NAMES.length], mul: [1, 0.9, 1.1, 0.85, 1.05][i % 5], ...CAT_TYPES[i % CAT_TYPES.length], ...spawnSpot() }));
-  // puppies and kittens sit near the start, where you can reach them
-  const sitSpot = (i, n, r0) => { const ang = -Math.PI / 2 + (i - (n - 1) / 2) * 0.45; return { x: Math.cos(ang) * r0 + 0.2, z: 1.5 + Math.sin(ang) * r0 }; };
-  for (let i = 0; i < nPuppies; i++) dogs.push(makeAnimal({ kind: 'dog', breed: 'puppy', name: PUPPY_NAMES[i % PUPPY_NAMES.length], mul: rand(0.9, 1.1), coat: [0xffffff, 0xf2e2cf, 0xd9c5b0][i % 3], ...sitSpot(i, nPuppies, 1.6) }));
-  for (let i = 0; i < nKittens; i++) cats.push(makeAnimal({ kind: 'cat', breed: 'kitten', name: KITTEN_NAMES[i % KITTEN_NAMES.length], mul: rand(0.9, 1.1), coat: [0xffffff, 0xffe2c6, 0xd6d6de][i % 3], ...sitSpot(i, nKittens, 2.3) }));
+  // puppies and kittens: small, quick little versions that start near you
+  const nearYou = () => { const ang = rand(-2.6, -0.5), r0 = rand(1.5, 3); return { x: Math.cos(ang) * r0, z: 1.5 + Math.sin(ang) * r0 }; };
+  for (let i = 0; i < nPuppies; i++) dogs.push(makeAnimal({ kind: 'dog', breed: 'puppy', name: PUPPY_NAMES[i % PUPPY_NAMES.length], mul: rand(0.42, 0.5), coat: [0xffffff, 0xf2e2cf, 0xd9c5b0][i % 3], ...nearYou() }));
+  for (let i = 0; i < nKittens; i++) cats.push(makeAnimal({ kind: 'cat', breed: 'kitten', name: KITTEN_NAMES[i % KITTEN_NAMES.length], mul: rand(0.5, 0.58), coat: [0xffffff, 0xffe2c6, 0xd6d6de][i % 3], ...nearYou() }));
   for (let i = 0; i < nFoxes; i++) dogs.push(makeAnimal({ kind: 'dog', breed: 'fox', name: FOX_NAMES[i % FOX_NAMES.length], mul: [1, 0.9, 1.1][i % 3], coat: [0, 0], ...spawnSpot() }));
   animals.push(...dogs, ...cats);
 }
