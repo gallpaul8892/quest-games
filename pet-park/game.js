@@ -126,13 +126,13 @@ function makeTextSprite(text, w, h, fontPx, worldW) {
   return s;
 }
 
-const scorePanel = makeTextPanel('', 2000, 128, 46, 2.6);
+const scorePanel = makeTextPanel('', 2500, 128, 46, 3.2);
 scorePanel.position.set(0, 1.85, -2.8);
 scene.add(scorePanel);
 
-const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0, meals: 0 };
+const stats = { pets: 0, fetches: 0, catScuffles: 0, dogScuffles: 0, fakeOuts: 0, meals: 0, cleans: 0 };
 function updateScore() {
-  scorePanel.userData.setText(`Pets ${stats.pets}  ·  Fetches ${stats.fetches}  ·  Fake-outs ${stats.fakeOuts}  ·  Meals ${stats.meals}  ·  Cat scuffles ${stats.catScuffles}  ·  Dog pile-ups ${stats.dogScuffles}`);
+  scorePanel.userData.setText(`Pets ${stats.pets}  ·  Fetches ${stats.fetches}  ·  Fake-outs ${stats.fakeOuts}  ·  Meals ${stats.meals}  ·  Trays cleaned ${stats.cleans}  ·  Cat scuffles ${stats.catScuffles}  ·  Dog pile-ups ${stats.dogScuffles}`);
 }
 
 // ---------- Ball table ----------
@@ -264,6 +264,94 @@ const catTrees = [];
     catTrees.push(tree);
   }
 }
+// ---------- Litter trays ----------
+const TRAY_FULL = 3;
+const trays = [];
+{
+  const plastic = [0x4fb3e8, 0xf28c6b, 0x8ad07a];
+  const sandMat = new THREE.MeshStandardMaterial({ color: 0xe6d3a3, roughness: 1, flatShading: true });
+  const clumpMat = new THREE.MeshStandardMaterial({ color: 0x9a7b52, roughness: 1, flatShading: true });
+  const clumpGeo = new THREE.DodecahedronGeometry(0.028, 0);
+  const stinkTex = canvasTex(g => {
+    g.strokeStyle = 'rgba(120,180,60,0.9)'; g.lineWidth = 7; g.lineCap = 'round';
+    for (const x of [36, 64, 92]) { g.beginPath(); for (let y = 118; y > 12; y -= 4) g.lineTo(x + Math.sin(y * 0.09 + x) * 10, y); g.stroke(); }
+  });
+  [-3.6, -2.7, -1.8].forEach((z, i) => {
+    const x = -5.7;
+    const body = new THREE.MeshStandardMaterial({ color: plastic[i], roughness: 0.5 });
+    const W = 0.5, D = 0.38, H = 0.12, T = 0.02;
+    const walls = [
+      new THREE.BoxGeometry(W, 0.02, D).translate(0, 0.01, 0),
+      new THREE.BoxGeometry(W, H, T).translate(0, H / 2, D / 2), new THREE.BoxGeometry(W, H, T).translate(0, H / 2, -D / 2),
+      new THREE.BoxGeometry(T, H, D).translate(W / 2, H / 2, 0), new THREE.BoxGeometry(T, H * 0.6, D).translate(-W / 2, H * 0.3, 0),
+    ];
+    const tray = new THREE.Mesh(mergeGeometries(walls), body);
+    tray.position.set(x, 0, z); tray.castShadow = true; scene.add(tray);
+    const sand = new THREE.Mesh(new THREE.BoxGeometry(W - 0.04, 0.05, D - 0.04), sandMat);
+    sand.position.set(x, 0.045, z); scene.add(sand);
+    const clumps = [];
+    for (let k = 0; k < TRAY_FULL * 2; k++) {
+      const c = new THREE.Mesh(clumpGeo, clumpMat);
+      c.position.set(x + rand(-0.15, 0.15), 0.075, z + rand(-0.1, 0.1));
+      c.rotation.set(rand(0, 3), rand(0, 3), 0); c.visible = false; scene.add(c); clumps.push(c);
+    }
+    const stink = new THREE.Sprite(new THREE.SpriteMaterial({ map: stinkTex, transparent: true, depthWrite: false }));
+    stink.scale.setScalar(0.35); stink.position.set(x, 0.3, z); stink.visible = false; scene.add(stink);
+    const sign = makeTextSprite('Clean me!', 512, 128, 60, 0.36);
+    sign.position.set(x, 0.62, z); sign.visible = false; scene.add(sign);
+    trays.push({ x, z, dirt: 0, occupant: null, clumps, stink, sign });
+  });
+  const label = makeTextSprite('Litter trays', 512, 128, 56, 0.5);
+  label.position.set(-5.7, 1.0, -2.7); scene.add(label);
+}
+function addClump(tr) {
+  for (let k = 0; k < 2; k++) { const c = tr.clumps.find(c => !c.visible); if (c) c.visible = true; }
+}
+function cleanTray(tr, handIndex = -1) {
+  if (tr.dirt <= 0) return false;
+  tr.dirt = 0;
+  for (const c of tr.clumps) {
+    if (c.visible) { tmpV.copy(c.position); tmpV.y += 0.05; spawnParticle('star', tmpV); }
+    c.visible = false;
+  }
+  stats.cleans++; updateScore();
+  haptic(handIndex, 0.5, 70);
+  crunch(0.7, 1200); setTimeout(() => crunch(0.6, 900), 90); setTimeout(ding, 200);
+  return true;
+}
+function trayNear(pos, maxD) {
+  let best = null, bd = maxD;
+  for (const tr of trays) { const d = Math.hypot(pos.x - tr.x, pos.z - tr.z) + Math.max(0, pos.y - 0.25); if (d < bd) { bd = d; best = tr; } }
+  return best;
+}
+function trayOnRay(ray, maxDist) {
+  for (const tr of trays) {
+    if (tr.dirt <= 0) continue;
+    tmpV2.set(tr.x, 0.07, tr.z);
+    if (tmpV2.distanceTo(ray.origin) < maxDist && ray.distanceSqToPoint(tmpV2) < 0.28 * 0.28) return tr;
+  }
+  return null;
+}
+function cleanTrayFor(a) {
+  let best = null, bd = Infinity;
+  for (const tr of trays) {
+    if (tr.dirt >= TRAY_FULL || (tr.occupant && tr.occupant !== a)) continue;
+    const d = Math.hypot(tr.x - a.group.position.x, tr.z - a.group.position.z);
+    if (d < bd) { bd = d; best = tr; }
+  }
+  return best;
+}
+function updateTrays(t) {
+  anyCleanTray = trays.some(tr => tr.dirt < TRAY_FULL);
+  for (const tr of trays) {
+    const dirty = tr.dirt >= TRAY_FULL;
+    tr.stink.visible = tr.dirt >= TRAY_FULL - 1;
+    tr.stink.material.opacity = 0.6 + 0.3 * Math.sin(t * 3 + tr.x);
+    tr.stink.position.y = 0.3 + Math.sin(t * 1.5 + tr.z) * 0.03;
+    tr.sign.visible = dirty;
+  }
+}
+
 function freePlatform(tree, minIdx = 1) {
   const free = tree.platforms.map((pl, i) => ({ pl, i })).filter(({ pl, i }) => i >= minIdx && pl.occ < pl.cap);
   return free.length ? pick(free).i : -1;
@@ -555,6 +643,18 @@ const HUNGRY_MAT = new THREE.SpriteMaterial({ depthWrite: false, transparent: tr
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
 })() });
 
+const TRAY_ICON_MAT = new THREE.SpriteMaterial({ depthWrite: false, transparent: true, map: (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,0.95)'; g.beginPath(); g.arc(64, 64, 60, 0, Math.PI * 2); g.fill();
+  g.strokeStyle = '#ff9a3d'; g.lineWidth = 6; g.stroke();
+  g.fillStyle = '#e6d3a3'; g.fillRect(26, 62, 76, 14);
+  g.fillStyle = '#4fb3e8'; g.beginPath(); g.moveTo(20, 60); g.lineTo(108, 60); g.lineTo(100, 92); g.lineTo(28, 92); g.closePath(); g.fill();
+  g.strokeStyle = '#6aa832'; g.lineWidth = 5;
+  for (const x of [48, 64, 80]) { g.beginPath(); for (let y = 54; y > 18; y -= 3) g.lineTo(x + Math.sin(y * 0.25 + x) * 4, y); g.stroke(); }
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+})() });
+
 // ---------- Animals ----------
 const DOG_NAMES = ['Biscuit', 'Pepper', 'Bramble', 'Scout', 'Hamish', 'Maisie', 'Bonnie', 'Archie', 'Rolo', 'Toffee', 'Murphy',
   'Bella', 'Duke', 'Poppy', 'Bruno', 'Daisy', 'Hector', 'Skye', 'Monty', 'Rosie'];
@@ -675,6 +775,7 @@ function makeAnimal({ kind, breed = kind, mul = 1, name, coat, x, z }) {
     walkNative: tpl.cfg.walkNative * variation, runNative: tpl.cfg.runNative * variation,
     size: (isDog ? 1 : 0.72) * variation, len: tpl.cfg.length * variation,
     cycleLen: rand(70, 120), sleepFrac: isDog ? 0.27 : 0.34, cycleT: 0, lying: false, sinkCur: 0, sinkMax: tpl.height * (isDog ? 0.3 : 0.24), zzzT: 0, climb: null, sleepSpot: null,
+    toilet: rand(0, 0.4), toiletRate: isDog ? 0 : 1 / rand(90, 150), tray: null, inTray: false, litterT: 0,
     hunger: rand(0.15, 0.5), hungerRate: 1 / rand(100, 170), bowl: null, eatingNow: false, foodCheckT: rand(0, 0.5), hungryIcon: null,
     speed: (isDog ? 1.1 : 0.8) * (0.6 + 0.4 * variation) * rand(0.9, 1.1), fast: (isDog ? 3.0 : 2.6) * (0.7 + 0.3 * variation) * rand(0.9, 1.1),
     voice: clamp(rand(0.95, 1.1) / Math.sqrt(variation), 0.7, 1.5), seed: rand(0, 100),
@@ -992,6 +1093,8 @@ function toWander(a) {
   }
   if (a.climb) { releasePlatform(a); a.climb = null; }
   a.lying = false; a.sleepSpot = null;
+  if (a.tray) { if (a.tray.occupant === a) a.tray.occupant = null; a.tray = null; }
+  a.inTray = false;
   if (a.bowl) { if (a.bowl.occupant === a) a.bowl.occupant = null; a.bowl = null; }
   a.eatingNow = false;
   if (a.mode === 'catchase' && a.chaseCat && a.chaseCat.chaser === a) a.chaseCat.chaser = null;
@@ -1100,7 +1203,8 @@ function steer(a, x, z, dt, rate) {
   turnTo(a, Math.atan2(dx, dz), dt, rate);
   return Math.hypot(dx, dz);
 }
-function isRowdy(a) { return false; }   // replaced by the litter-tray system
+let anyCleanTray = true;
+function isRowdy(a) { return !a.isDog && a.toilet > 0.85 && !anyCleanTray; }   // needs the litter tray but they're all dirty
 function platformPoint(pl) {
   const ang = rand(0, Math.PI * 2), rr = rand(0, pl.r * 0.3);
   return new THREE.Vector3(pl.x + Math.cos(ang) * rr, pl.y + (pl.bed ? 0.01 : 0), pl.z + Math.sin(ang) * rr);
@@ -1178,7 +1282,7 @@ function chooseTarget(a, player) {
     const ang = rand(0, Math.PI * 2), rad = Math.sqrt(Math.random()) * ARENA;
     a.target = new THREE.Vector3(Math.cos(ang) * rad, 0, Math.sin(ang) * rad);
   }
-  a.zoom = Math.random() < (a.isDog ? 0.2 : 0.3);
+  a.zoom = Math.random() < (a.isDog ? 0.2 : isRowdy(a) ? 0.7 : 0.3);
 }
 
 function updateAnimal(a, dt, t, player) {
@@ -1189,17 +1293,22 @@ function updateAnimal(a, dt, t, player) {
   a.cycleT = (a.cycleT + dt) % a.cycleLen;
   const sleepy = a.cycleT > a.cycleLen * (1 - a.sleepFrac);
   if (sleepy && a.mode === 'wander' && a.petTimer <= 0 && a.hunger < HUNGRY && !isRowdy(a)) startSleep(a, t);
-  // go and eat when hungry and there's food in a bowl
+  if (a.mode !== 'litter') a.toilet = Math.min(1, a.toilet + a.toiletRate * dt * (a.lying ? 0.4 : 1));
+  // go and eat when hungry and there's food in a bowl; cats use the litter tray when they need to
   a.foodCheckT -= dt;
   if (a.foodCheckT <= 0) {
     a.foodCheckT = 0.5;
-    if (a.hunger > 0.35 && (a.mode === 'wander' || a.mode === 'play' || a.mode === 'follow' || a.mode === 'fooled')) {
+    const free = a.mode === 'wander' || a.mode === 'play' || a.mode === 'follow';
+    const trayCheck = !a.isDog && a.toilet > 0.5 && (free || (a.mode === 'sleep' && a.toilet > 0.85));
+    const tr = trayCheck ? cleanTrayFor(a) : null;
+    if (tr) { toWander(a); a.mode = 'litter'; a.tray = tr; tr.occupant = a; }
+    else if (a.hunger > 0.35 && (a.mode === 'wander' || a.mode === 'play' || a.mode === 'follow' || a.mode === 'fooled')) {
       const bw = freeBowlFor(a);
       if (bw) { toWander(a); a.mode = 'eat'; a.bowl = bw; bw.occupant = a; }
     }
   }
   // hungry pets are noisy
-  if (a.hunger > HUNGRY && a.mode !== 'eat' && Math.random() < dt * 0.3 * a.hunger && canPlay('hungry', 0.45)) {
+  if ((a.hunger > HUNGRY || isRowdy(a)) && a.mode !== 'eat' && a.mode !== 'litter' && Math.random() < dt * 0.3 * Math.max(a.hunger, a.toilet) && canPlay('hungry', 0.45)) {
     a.group.getWorldPosition(tmpV2);
     const v = volAt(tmpV2) * 0.8;
     if (a.isDog) (Math.random() < 0.55 ? whine : bark)(v, a.voice); else meow(v, a.voice * rand(0.95, 1.15));
@@ -1272,7 +1381,31 @@ function updateAnimal(a, dt, t, player) {
       }
       break;
     }
+    case 'litter': {
+      const tr = a.tray;
+      if (!tr) { toWander(a); break; }
+      if (!a.inTray) {
+        if (tr.dirt >= TRAY_FULL) { toWander(a); break; }       // got dirty before we arrived
+        const d = steer(a, tr.x, tr.z, dt, 7);
+        want = a.speed * clamp(d / 0.6, 0.3, 1.2);
+        if (d < 0.18) { a.inTray = true; a.litterT = rand(3, 4.5); }
+      } else {
+        direct = true;
+        p.x += (tr.x - p.x) * 0.1; p.z += (tr.z - p.z) * 0.1;
+        a.litterT -= dt;
+        g.rotation.y += Math.sin(t * 2.5 + a.seed) * dt * 1.6;     // scratch and turn about
+        if (a.litterT <= 0) {
+          a.toilet = 0; tr.dirt = Math.min(TRAY_FULL, tr.dirt + 1); addClump(tr);
+          toWander(a);
+          const ang = rand(0, Math.PI * 2);
+          a.target = new THREE.Vector3(tr.x + 1.5 + Math.cos(ang), 0, tr.z + Math.sin(ang) * 1.5);
+          a.zoom = Math.random() < 0.6; a.idleT = 0;                  // post-litter zoomies
+        }
+      }
+      break;
+    }
     case 'sleep': {
+      if (!a.lying && (!sleepy || a.hunger > HUNGRY || isRowdy(a))) { toWander(a); break; }
       if (!a.lying) {
         const d = steer(a, a.sleepSpot.x, a.sleepSpot.z, dt, 5);
         if (d > 0.2) want = a.speed * 0.8 * clamp(d / 0.6, 0.4, 1);
@@ -1504,12 +1637,14 @@ function updateAnimal(a, dt, t, player) {
     a.model.rotation.x += (tilt - a.model.rotation.x) * (1 - Math.exp(-8 * dt));
   }
   const onPlatform = p.y > 0.05;
-  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : 0;
+  const sinkTarget = lyingNow ? (onPlatform ? Math.min(a.sinkMax, 0.05 / g.scale.x) : a.sinkMax) : (a.mode === 'litter' && a.inTray ? a.sinkMax * 0.3 - 0.06 / g.scale.x : 0);
   a.sinkCur += (sinkTarget - a.sinkCur) * (1 - Math.exp(-4 * dt));
   if (a.mode === 'climb' && a.hopping) a.model.rotation.x = -0.35 * Math.sin(a.hopping * Math.PI);
   a.model.position.y = a.modelBaseY + hop / g.scale.x - a.sinkCur;
   a.label.visible = label && a.petTimer <= 0;
-  const showHungry = a.hunger > HUNGRY && a.mode !== 'eat' && !a.label.visible;
+  const rowdy = isRowdy(a) && a.mode !== 'litter';
+  const showHungry = (a.hunger > HUNGRY || rowdy) && a.mode !== 'eat' && !a.label.visible;
+  a.hungryIconSprite.material = a.hunger > HUNGRY ? HUNGRY_MAT : TRAY_ICON_MAT;
   a.hungryIconSprite.visible = showHungry;
   if (showHungry) a.hungryIconSprite.position.y = a.label.position.y + 0.02 + Math.sin(t * 3 + a.seed) * 0.03;
 }
@@ -1588,7 +1723,7 @@ function director(dt) {
       }
     }
   }
-  const hungryCats = cats.filter(c => c.hunger > HUNGRY).length;
+  const hungryCats = cats.filter(c => c.hunger > HUNGRY || isRowdy(c)).length;
   catFightTimer -= dt * (1 + hungryCats * 0.35);
   if (catFightTimer > 0) return;
   catFightTimer = rand(2, 5);
@@ -1734,11 +1869,13 @@ for (let i = 0; i < 2; i++) {
     audio();
     if (!pinchPoint(i, tmpV)) return;
     if (tmpV.distanceTo(BUTTON) < 0.22) { pressFeeder(i); return; }
+    { const tr = trayNear(tmpV, 0.35); if (tr && cleanTray(tr, i)) return; }
     let b = ballNear(tmpV, isHand(i) ? 0.2 : 0.28);
     if (!b) {
       const a = animalNear(tmpV, isHand(i) ? 0.45 : 0.6);
       if (a) { pet(a, i, false); return; }
       b = ballOnRay(controllerRay(i), 12);
+      if (!b) { const tr = trayOnRay(controllerRay(i), 4); if (tr) { cleanTray(tr, i); return; } }
     }
     if (b) { grabBall(b, i); h.btn = btn; haptic(i, 0.4, 50); return; }
     if (btn === 'select') { aiming[i] = true; updateAim(i); }
@@ -1813,6 +1950,11 @@ function updateHands(dt) {
       if (aimValid[i]) { marker.position.copy(aimPoint[i]); showMarker = true; }
     }
 
+    // scoop out a dirty tray by reaching into the sand
+    {
+      const tip = hand ? jointWorld(i, 'index-finger-tip', tmpV3) : grips[i].getWorldPosition(tmpV3);
+      if (tip && tip.y < 0.16) for (const tr of trays) if (Math.abs(tip.x - tr.x) < 0.24 && Math.abs(tip.z - tr.z) < 0.18) cleanTray(tr, i);
+    }
     // poke the feed button with a fingertip (hands) or the controller
     {
       const tip = hand ? jointWorld(i, 'index-finger-tip', tmpV3) : grips[i].getWorldPosition(tmpV3);
@@ -1878,6 +2020,7 @@ const keys = new Set();
 addEventListener('keydown', e => {
   keys.add(e.code);
   if (e.code === 'KeyE' && !renderer.xr.isPresenting) pressFeeder(-1);
+  if (e.code === 'KeyC' && !renderer.xr.isPresenting) { const tr = trayNear(playerPos.clone().setY(0), 3); if (tr) cleanTray(tr); }
   if (e.code === 'KeyF' && deskBall && clock.elapsedTime > fakeCooldownUntil && !renderer.xr.isPresenting) {
     camera.getWorldPosition(tmpV); camera.getWorldDirection(tmpV2);
     fakeThrow(landingPoint(tmpV, tmpV2.multiplyScalar(9).add(new THREE.Vector3(0, 2.5, 0))));
@@ -1902,6 +2045,7 @@ addEventListener('pointerup', e => {
   if (!wasClick || renderer.xr.isPresenting) return;
   raycaster.setFromCamera(new THREE.Vector2(e.clientX / innerWidth * 2 - 1, -(e.clientY / innerHeight) * 2 + 1), camera);
   if (raycaster.ray.distanceSqToPoint(BUTTON) < 0.1 * 0.1 && raycaster.ray.origin.distanceTo(BUTTON) < 3.5) { pressFeeder(-1); return; }
+  { const tr = trayOnRay(raycaster.ray, 5); if (tr) { cleanTray(tr); return; } }
   if (deskBall) {
     camera.getWorldDirection(tmpV);
     const b = deskBall; deskBall = null;
@@ -1943,7 +2087,7 @@ let shadowT = 0;
 
 // ---------- Main loop ----------
 updateScore();
-window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
+window.petPark = { animals, dogs, cats, balls, fights, stats, bowls, pressFeeder, trays, cleanTray, throwBall, grabBall, pet, fakeThrow, startCatChase, renderer, scene, camera, dolly };
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
@@ -1969,6 +2113,7 @@ renderer.setAnimationLoop(() => {
   separateAnimals();
   updateBalls(dt);
   updateFeeder(dt, t);
+  updateTrays(t);
   updateParticles(dt);
   scenery?.update?.(dt, t, playerPos);
   shadowT -= dt;
